@@ -1,4 +1,6 @@
 import JSZip from "jszip";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
 import { NextResponse } from "next/server";
 
@@ -21,8 +23,15 @@ const BACKGROUND = "#FFFFFF";
 const BLUE = "#2166F3";
 const RED = "#E23D2E";
 const ORANGE = "#F28C28";
-const FONT_FAMILY =
-  "'Yu Gothic','YuGothic','Meiryo','Noto Sans JP','Hiragino Sans','MS PGothic',sans-serif";
+const FONT_FAMILY = "'EmbeddedNotoSansJP',sans-serif";
+const EMBEDDED_FONT_PATH = path.join(
+  process.cwd(),
+  "node_modules",
+  "@fontsource",
+  "noto-sans-jp",
+  "files",
+  "noto-sans-jp-japanese-700-normal.woff",
+);
 
 type SymbolOption = "-" | "circle" | "cross" | "triangle";
 
@@ -30,6 +39,8 @@ type RequestRow = {
   text: string;
   symbols: [SymbolOption, SymbolOption, SymbolOption];
 };
+
+let embeddedFontDataUriPromise: Promise<string> | null = null;
 
 export async function POST(request: Request) {
   try {
@@ -161,6 +172,7 @@ function uniquifyFilename(filename: string, seenNames: Map<string, number>) {
 }
 
 async function renderRowPng(text: string, symbols: RequestRow["symbols"]) {
+  const fontDataUri = await getEmbeddedFontDataUri();
   const visibleSymbols = symbols.filter((symbol) => symbol !== "-");
   const lines = text.split("\n");
   const lineHeight = TEXT_SIZE + TEXT_LINE_SPACING;
@@ -170,6 +182,14 @@ async function renderRowPng(text: string, symbols: RequestRow["symbols"]) {
 
   const svg = `
     <svg width="${CANVAS_WIDTH}" height="${canvasHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
+      <style>
+        @font-face {
+          font-family: 'EmbeddedNotoSansJP';
+          src: url('${fontDataUri}') format('woff');
+          font-weight: 700;
+          font-style: normal;
+        }
+      </style>
       <rect width="100%" height="100%" fill="${BACKGROUND}" />
       <text
         x="${CANVAS_WIDTH / 2}"
@@ -247,4 +267,14 @@ function encodeRFC5987ValueChars(value: string) {
   return encodeURIComponent(value)
     .replace(/['()]/g, escape)
     .replace(/\*/g, "%2A");
+}
+
+async function getEmbeddedFontDataUri() {
+  if (!embeddedFontDataUriPromise) {
+    embeddedFontDataUriPromise = readFile(EMBEDDED_FONT_PATH).then((fontBuffer) => {
+      return `data:font/woff;base64,${fontBuffer.toString("base64")}`;
+    });
+  }
+
+  return embeddedFontDataUriPromise;
 }
