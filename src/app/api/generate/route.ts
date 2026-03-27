@@ -1,25 +1,34 @@
 import JSZip from "jszip";
-import { spawn } from "node:child_process";
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import sharp from "sharp";
 import { NextResponse } from "next/server";
 
 const SYMBOL_VALUES = new Set(["-", "circle", "cross", "triangle"]);
-const PYTHON_SCRIPT = path.join(process.cwd(), "python", "render_images.py");
+
+const CANVAS_WIDTH = 850;
+const TEXT_TOP_PADDING = 5;
+const TEXT_BOTTOM_PADDING = 28;
+const BOTTOM_PADDING = 24;
+const SIDE_PADDING = 70;
+const TEXT_SIZE = 200;
+const TEXT_LINE_SPACING = 5;
+const SYMBOL_WIDTH = 144;
+const SYMBOL_STROKE = 28;
+const SYMBOL_GROUP_SPACING = 72;
+const SYMBOL_TOP_GAP = 5;
+
+const TEXT_COLOR = "#000000";
+const BACKGROUND = "#FFFFFF";
+const BLUE = "#2166F3";
+const RED = "#E23D2E";
+const ORANGE = "#F28C28";
+const FONT_FAMILY =
+  "'Yu Gothic','YuGothic','Meiryo','Noto Sans JP','Hiragino Sans','MS PGothic',sans-serif";
 
 type SymbolOption = "-" | "circle" | "cross" | "triangle";
 
 type RequestRow = {
   text: string;
   symbols: [SymbolOption, SymbolOption, SymbolOption];
-};
-
-type PythonOutput = {
-  files: Array<{
-    name: string;
-    outputPath: string;
-  }>;
 };
 
 export async function POST(request: Request) {
@@ -29,10 +38,7 @@ export async function POST(request: Request) {
       rows?: unknown;
     };
 
-    const title =
-      typeof body.title === "string"
-        ? body.title
-        : "";
+    const title = typeof body.title === "string" ? body.title : "";
     const rows = validateRows(body.rows);
     const rowsToRender = rows.filter((row) => row.text.trim().length > 0);
 
@@ -43,38 +49,37 @@ export async function POST(request: Request) {
       );
     }
 
-    const tempDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "sheet-image-generator-"),
-    );
+    const seenNames = new Map<string, number>();
+    const zip = new JSZip();
 
-    try {
-      const renderedFiles = await runPythonRenderer({
-        title,
-        rows: rowsToRender,
-        outputDir: tempDirectory,
-      });
+    for (const row of rowsToRender) {
+      const normalizedText = normalizeText(row.text);
+      if (!normalizedText) {
+        continue;
+      }
 
-      const zip = new JSZip();
-      await Promise.all(
-        renderedFiles.files.map(async (file) => {
-          const contents = await fs.readFile(file.outputPath);
-          zip.file(file.name, contents);
-        }),
+      const fileName = uniquifyFilename(
+        buildFileName(title, normalizedText),
+        seenNames,
       );
-
-      const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
-      const archiveName = `${sanitizeFileComponent(title) || "generated-images"}.zip`;
-
-      return new Response(new Uint8Array(zipBuffer), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/zip",
-          "Content-Disposition": `attachment; filename="${archiveName}"`,
-        },
-      });
-    } finally {
-      await fs.rm(tempDirectory, { recursive: true, force: true });
+      const png = await renderRowPng(normalizedText, row.symbols);
+      zip.file(fileName, png);
     }
+
+    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    const archiveName = `${sanitizeFileComponent(title) || "generated-images"}.zip`;
+    const asciiArchiveName = toAsciiDownloadName(archiveName);
+
+    return new Response(new Uint8Array(zipBuffer), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": buildContentDisposition(
+          asciiArchiveName,
+          archiveName,
+        ),
+      },
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Image generation failed.";
@@ -114,54 +119,19 @@ function validateRows(value: unknown): RequestRow[] {
   });
 }
 
-async function runPythonRenderer(input: {
-  title: string;
-  rows: RequestRow[];
-  outputDir: string;
-}) {
-  const payload = JSON.stringify(input);
+function normalizeText(value: string) {
+  return value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+    .join("\n");
+}
 
-  return await new Promise<PythonOutput>((resolve, reject) => {
-    const child = spawn("python", [PYTHON_SCRIPT], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        PYTHONUTF8: "1",
-      },
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error) => {
-      reject(error);
-    });
-
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `Python renderer failed with code ${code}.`));
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(stdout) as PythonOutput;
-        resolve(parsed);
-      } catch {
-        reject(new Error("Python renderer returned invalid output."));
-      }
-    });
-
-    child.stdin.write(payload, "utf8");
-    child.stdin.end();
-  });
+function buildFileName(title: string, text: string) {
+  const titleComponent = sanitizeFileComponent(title) || "untitled";
+  const textComponent = sanitizeFileComponent(text.replace(/\n/g, " ")) || "row";
+  return `${titleComponent}_${textComponent}.png`;
 }
 
 function sanitizeFileComponent(value: string) {
@@ -171,4 +141,110 @@ function sanitizeFileComponent(value: string) {
     .replace(/\s+/g, "_")
     .replace(/\.+$/g, "")
     .slice(0, 80);
+}
+
+function uniquifyFilename(filename: string, seenNames: Map<string, number>) {
+  const count = seenNames.get(filename) ?? 0;
+  if (count === 0) {
+    seenNames.set(filename, 1);
+    return filename;
+  }
+
+  const extensionIndex = filename.lastIndexOf(".");
+  const stem =
+    extensionIndex === -1 ? filename : filename.slice(0, extensionIndex);
+  const suffix = extensionIndex === -1 ? "" : filename.slice(extensionIndex);
+  const candidate = `${stem}_${count + 1}${suffix}`;
+  seenNames.set(filename, count + 1);
+  seenNames.set(candidate, 1);
+  return candidate;
+}
+
+async function renderRowPng(text: string, symbols: RequestRow["symbols"]) {
+  const visibleSymbols = symbols.filter((symbol) => symbol !== "-");
+  const lines = text.split("\n");
+  const lineHeight = TEXT_SIZE + TEXT_LINE_SPACING;
+  const textBlockHeight = lines.length * TEXT_SIZE + (lines.length - 1) * TEXT_LINE_SPACING;
+  const textHeight = textBlockHeight + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING;
+  const canvasHeight = textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING;
+
+  const svg = `
+    <svg width="${CANVAS_WIDTH}" height="${canvasHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="${BACKGROUND}" />
+      <text
+        x="${CANVAS_WIDTH / 2}"
+        y="${TEXT_TOP_PADDING + TEXT_SIZE}"
+        fill="${TEXT_COLOR}"
+        font-family="${FONT_FAMILY}"
+        font-size="${TEXT_SIZE}"
+        font-weight="700"
+        text-anchor="middle"
+      >
+        ${lines
+          .map((line, index) => {
+            const dy = index === 0 ? 0 : lineHeight;
+            return `<tspan x="${CANVAS_WIDTH / 2}" dy="${dy}">${escapeXml(line)}</tspan>`;
+          })
+          .join("")}
+      </text>
+      ${renderSymbols(visibleSymbols, textHeight)}
+    </svg>
+  `;
+
+  return await sharp(Buffer.from(svg, "utf8")).png().toBuffer();
+}
+
+function renderSymbols(symbols: SymbolOption[], textHeight: number) {
+  if (symbols.length === 0) {
+    return "";
+  }
+
+  const totalWidth =
+    symbols.length * SYMBOL_WIDTH + (symbols.length - 1) * SYMBOL_GROUP_SPACING;
+  const startX = (CANVAS_WIDTH - totalWidth) / 2;
+  const topY = textHeight + SYMBOL_TOP_GAP;
+
+  return symbols
+    .map((symbol, index) => {
+      const left = startX + index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING);
+      switch (symbol) {
+        case "circle":
+          return `<circle cx="${left + SYMBOL_WIDTH / 2}" cy="${topY + SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
+        case "cross":
+          return [
+            `<line x1="${left + 18}" y1="${topY + 18}" x2="${left + SYMBOL_WIDTH - 18}" y2="${topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,
+            `<line x1="${left + SYMBOL_WIDTH - 18}" y1="${topY + 18}" x2="${left + 18}" y2="${topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,
+          ].join("");
+        case "triangle":
+          return `<polygon points="${left + SYMBOL_WIDTH / 2},${topY + 8} ${left + SYMBOL_WIDTH - 10},${topY + SYMBOL_WIDTH - 12} ${left + 10},${topY + SYMBOL_WIDTH - 12}" fill="none" stroke="${ORANGE}" stroke-width="${SYMBOL_STROKE}" stroke-linejoin="miter" />`;
+        default:
+          return "";
+      }
+    })
+    .join("");
+}
+
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function toAsciiDownloadName(value: string) {
+  const normalized = value.normalize("NFKD").replace(/[^\x20-\x7E]/g, "");
+  const cleaned = normalized.replace(/["\\]/g, "").trim();
+  return cleaned || "generated-images.zip";
+}
+
+function buildContentDisposition(asciiName: string, utf8Name: string) {
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeRFC5987ValueChars(utf8Name)}`;
+}
+
+function encodeRFC5987ValueChars(value: string) {
+  return encodeURIComponent(value)
+    .replace(/['()]/g, escape)
+    .replace(/\*/g, "%2A");
 }
