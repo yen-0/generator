@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import opentype, { type Font } from "opentype.js";
 import sharp from "sharp";
 import { NextResponse } from "next/server";
 
@@ -23,7 +24,6 @@ const BACKGROUND = "#FFFFFF";
 const BLUE = "#2166F3";
 const RED = "#E23D2E";
 const ORANGE = "#F28C28";
-const FONT_FAMILY = "'EmbeddedNotoSansJP',sans-serif";
 const EMBEDDED_FONT_PATH = path.join(
   process.cwd(),
   "node_modules",
@@ -40,7 +40,7 @@ type RequestRow = {
   symbols: [SymbolOption, SymbolOption, SymbolOption];
 };
 
-let embeddedFontDataUriPromise: Promise<string> | null = null;
+let embeddedFontPromise: Promise<Font> | null = null;
 
 export async function POST(request: Request) {
   try {
@@ -172,41 +172,19 @@ function uniquifyFilename(filename: string, seenNames: Map<string, number>) {
 }
 
 async function renderRowPng(text: string, symbols: RequestRow["symbols"]) {
-  const fontDataUri = await getEmbeddedFontDataUri();
+  const font = await getEmbeddedFont();
   const visibleSymbols = symbols.filter((symbol) => symbol !== "-");
   const lines = text.split("\n");
-  const lineHeight = TEXT_SIZE + TEXT_LINE_SPACING;
-  const textBlockHeight = lines.length * TEXT_SIZE + (lines.length - 1) * TEXT_LINE_SPACING;
+  const metrics = measureLines(lines, font);
+  const textBlockHeight =
+    metrics.totalHeight + (lines.length - 1) * TEXT_LINE_SPACING;
   const textHeight = textBlockHeight + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING;
   const canvasHeight = textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING;
 
   const svg = `
     <svg width="${CANVAS_WIDTH}" height="${canvasHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
-      <style>
-        @font-face {
-          font-family: 'EmbeddedNotoSansJP';
-          src: url('${fontDataUri}') format('woff');
-          font-weight: 700;
-          font-style: normal;
-        }
-      </style>
       <rect width="100%" height="100%" fill="${BACKGROUND}" />
-      <text
-        x="${CANVAS_WIDTH / 2}"
-        y="${TEXT_TOP_PADDING + TEXT_SIZE}"
-        fill="${TEXT_COLOR}"
-        font-family="${FONT_FAMILY}"
-        font-size="${TEXT_SIZE}"
-        font-weight="700"
-        text-anchor="middle"
-      >
-        ${lines
-          .map((line, index) => {
-            const dy = index === 0 ? 0 : lineHeight;
-            return `<tspan x="${CANVAS_WIDTH / 2}" dy="${dy}">${escapeXml(line)}</tspan>`;
-          })
-          .join("")}
-      </text>
+      ${renderTextPaths(lines, font, metrics)}
       ${renderSymbols(visibleSymbols, textHeight)}
     </svg>
   `;
@@ -244,15 +222,6 @@ function renderSymbols(symbols: SymbolOption[], textHeight: number) {
     .join("");
 }
 
-function escapeXml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
 function toAsciiDownloadName(value: string) {
   const normalized = value.normalize("NFKD").replace(/[^\x20-\x7E]/g, "");
   const cleaned = normalized.replace(/["\\]/g, "").trim();
@@ -269,12 +238,60 @@ function encodeRFC5987ValueChars(value: string) {
     .replace(/\*/g, "%2A");
 }
 
-async function getEmbeddedFontDataUri() {
-  if (!embeddedFontDataUriPromise) {
-    embeddedFontDataUriPromise = readFile(EMBEDDED_FONT_PATH).then((fontBuffer) => {
-      return `data:font/woff;base64,${fontBuffer.toString("base64")}`;
-    });
+async function getEmbeddedFont() {
+  if (!embeddedFontPromise) {
+    embeddedFontPromise = readFile(EMBEDDED_FONT_PATH).then((fontBuffer) =>
+      opentype.parse(fontBuffer.buffer.slice(
+        fontBuffer.byteOffset,
+        fontBuffer.byteOffset + fontBuffer.byteLength,
+      )),
+    );
   }
 
-  return embeddedFontDataUriPromise;
+  return embeddedFontPromise;
+}
+
+function renderTextPaths(
+  lines: string[],
+  font: Font,
+  metrics: {
+    lineMetrics: Array<{ width: number; height: number; top: number }>;
+    totalHeight: number;
+  },
+) {
+  let currentTop = TEXT_TOP_PADDING;
+
+  return lines
+    .map((line, index) => {
+      const lineMetric = metrics.lineMetrics[index];
+      const x = (CANVAS_WIDTH - lineMetric.width) / 2;
+      const baselineY = currentTop - lineMetric.top;
+      currentTop += lineMetric.height + TEXT_LINE_SPACING;
+
+      const pathData = font
+        .getPath(line, x, baselineY, TEXT_SIZE)
+        .toPathData(3);
+
+      return `<path d="${pathData}" fill="${TEXT_COLOR}" />`;
+    })
+    .join("");
+}
+
+function measureLines(lines: string[], font: Font) {
+  const lineMetrics = lines.map((line) => {
+    const path = font.getPath(line, 0, 0, TEXT_SIZE);
+    const box = path.getBoundingBox();
+    return {
+      width: Math.max(0, box.x2 - box.x1),
+      height: Math.max(TEXT_SIZE, box.y2 - box.y1),
+      top: box.y1,
+    };
+  });
+
+  const totalHeight = lineMetrics.reduce((sum, metric) => sum + metric.height, 0);
+
+  return {
+    lineMetrics,
+    totalHeight,
+  };
 }
