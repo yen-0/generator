@@ -10,19 +10,23 @@ CANVAS_WIDTH = 850
 TEXT_TOP_PADDING = 36
 TEXT_BOTTOM_PADDING = 28
 BOTTOM_PADDING = 24
-SIDE_PADDING = 70
 TEXT_SIZE = 200
 TEXT_LINE_SPACING = 5
 TEXT_COLOR = "#000000"
 BACKGROUND = "#FFFFFF"
+TRANSPARENT = (0, 0, 0, 0)
 SYMBOL_WIDTH = 144
 SYMBOL_STROKE = 28
 SYMBOL_GROUP_SPACING = 72
 SYMBOL_TOP_GAP = 5
+OUTER_PADDING = 28
+PANEL_GAP = 8
+PANEL_BORDER_WIDTH = 8
 
 BLUE = "#2166F3"
 RED = "#E23D2E"
 ORANGE = "#F28C28"
+PINK = "#FF9CC8"
 
 
 def main() -> None:
@@ -43,15 +47,19 @@ def main() -> None:
     files: list[dict[str, str]] = []
     seen_names: dict[str, int] = {}
 
-    for row in rows:
-        text = normalize_text(row.get("text", ""))
-        if not text:
-            continue
+    normalized_rows = [
+        {"text": text, "symbols": row.get("symbols", [])}
+        for row in rows
+        if (text := normalize_text(row.get("text", "")))
+    ]
 
-        symbols = [symbol for symbol in row.get("symbols", []) if symbol != "-"]
-        filename = uniquify_filename(build_filename(title, text), seen_names)
+    for panel_count, image in render_images(normalized_rows, font):
+        filename = uniquify_filename(
+            build_composite_filename(build_filename_base(title), panel_count),
+            seen_names,
+        )
         image_path = output_dir / filename
-        render_image(image_path, text, symbols, font)
+        image.save(image_path, format="PNG")
         files.append({"name": filename, "outputPath": str(image_path)})
 
     json.dump({"files": files}, sys.stdout)
@@ -90,10 +98,12 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def build_filename(title: str, text: str) -> str:
-    title_component = sanitize_filename(title) or "untitled"
-    text_component = sanitize_filename(text.replace("\n", " ")) or "row"
-    return f"{title_component}_{text_component}.png"
+def build_filename_base(title: str) -> str:
+    return sanitize_filename(title) or "generated-images"
+
+
+def build_composite_filename(base_name: str, panel_count: int) -> str:
+    return f"{base_name}_panels_1_to_{panel_count}.png"
 
 
 def sanitize_filename(value: str) -> str:
@@ -103,23 +113,60 @@ def sanitize_filename(value: str) -> str:
     return compact[:80].rstrip(".")
 
 
-def render_image(
-    image_path: Path,
-    text: str,
-    symbols: list[str],
+def render_images(
+    rows: list[dict[str, object]],
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-) -> None:
-    text_bbox = measure_text_block(text, font)
+) -> list[tuple[int, Image.Image]]:
+    panel_images = [
+        render_panel_image(
+            row["text"],
+            row["symbols"],
+            font,
+        )
+        for row in rows
+    ]
+
+    full_height = (
+        sum(panel.height for panel in panel_images)
+        + max(0, len(panel_images) - 1) * PANEL_GAP
+        + OUTER_PADDING * 2
+    )
+    full_width = CANVAS_WIDTH + OUTER_PADDING * 2
+    images: list[tuple[int, Image.Image]] = []
+
+    for panel_count in range(1, len(panel_images) + 1):
+        image = Image.new("RGBA", (full_width, full_height), TRANSPARENT)
+        current_top = OUTER_PADDING
+
+        for panel in panel_images[:panel_count]:
+            image.alpha_composite(panel, (OUTER_PADDING, current_top))
+            current_top += panel.height + PANEL_GAP
+
+        images.append((panel_count, image))
+
+    return images
+
+
+def render_panel_image(
+    text: object,
+    symbols: object,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> Image.Image:
+    text_value = text if isinstance(text, str) else ""
+    symbol_values = [symbol for symbol in symbols if symbol != "-"] if isinstance(symbols, list) else []
+    text_bbox = measure_text_block(text_value, font)
     text_height = (text_bbox[3] - text_bbox[1]) + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING
-    canvas_height = text_height + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING
-
-    image = Image.new("RGBA", (CANVAS_WIDTH, canvas_height), BACKGROUND)
+    panel_height = text_height + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING
+    image = Image.new("RGBA", (CANVAS_WIDTH, panel_height), BACKGROUND)
     draw = ImageDraw.Draw(image)
-
-    draw_text_block(draw, text, font, text_bbox, text_height)
-    draw_symbol_block(draw, symbols, text_height)
-
-    image.save(image_path, format="PNG")
+    draw.rectangle(
+        (0, 0, CANVAS_WIDTH - 1, panel_height - 1),
+        outline=PINK,
+        width=PANEL_BORDER_WIDTH,
+    )
+    draw_text_block(draw, text_value, font, text_bbox)
+    draw_symbol_block(draw, symbol_values, text_height)
+    return image
 
 
 def draw_text_block(
@@ -127,18 +174,10 @@ def draw_text_block(
     text: str,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     text_bbox: tuple[int, int, int, int],
-    text_height: int,
 ) -> None:
-    text_box = (
-        SIDE_PADDING,
-        0,
-        CANVAS_WIDTH - SIDE_PADDING,
-        text_height,
-    )
     text_width = text_bbox[2] - text_bbox[0]
-    text_block_height = text_bbox[3] - text_bbox[1]
-    x = text_box[0] + (text_box[2] - text_box[0] - text_width) / 2 - text_bbox[0]
-    y = TEXT_TOP_PADDING - text_bbox[1]
+    x = OUTER_PADDING + (CANVAS_WIDTH - text_width) / 2 - text_bbox[0]
+    y = OUTER_PADDING + TEXT_TOP_PADDING - text_bbox[1]
     draw.multiline_text(
         (x, y),
         text,
@@ -159,8 +198,8 @@ def draw_symbol_block(
 
     count = len(symbols)
     total_width = count * SYMBOL_WIDTH + (count - 1) * SYMBOL_GROUP_SPACING
-    start_x = (CANVAS_WIDTH - total_width) / 2
-    top_y = text_height + SYMBOL_TOP_GAP
+    start_x = OUTER_PADDING + (CANVAS_WIDTH - total_width) / 2
+    top_y = OUTER_PADDING + text_height + SYMBOL_TOP_GAP
 
     for index, symbol in enumerate(symbols):
         left = start_x + index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING)

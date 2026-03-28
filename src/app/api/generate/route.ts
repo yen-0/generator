@@ -11,19 +11,22 @@ const CANVAS_WIDTH = 850;
 const TEXT_TOP_PADDING = 5;
 const TEXT_BOTTOM_PADDING = 28;
 const BOTTOM_PADDING = 24;
-const SIDE_PADDING = 70;
 const TEXT_SIZE = 200;
 const TEXT_LINE_SPACING = 5;
 const SYMBOL_WIDTH = 144;
 const SYMBOL_STROKE = 28;
 const SYMBOL_GROUP_SPACING = 72;
 const SYMBOL_TOP_GAP = 5;
+const OUTER_PADDING = 28;
+const PANEL_GAP = 8;
+const PANEL_BORDER_WIDTH = 8;
 
 const TEXT_COLOR = "#000000";
 const BACKGROUND = "#FFFFFF";
 const BLUE = "#2166F3";
 const RED = "#E23D2E";
 const ORANGE = "#F28C28";
+const PINK = "#FF9CC8";
 const EMBEDDED_FONT_PATH = path.join(
   process.cwd(),
   "node_modules",
@@ -51,7 +54,12 @@ export async function POST(request: Request) {
 
     const title = typeof body.title === "string" ? body.title : "";
     const rows = validateRows(body.rows);
-    const rowsToRender = rows.filter((row) => row.text.trim().length > 0);
+    const rowsToRender = rows
+      .map((row) => ({
+        text: normalizeText(row.text),
+        symbols: row.symbols,
+      }))
+      .filter((row) => row.text.length > 0);
 
     if (rowsToRender.length === 0) {
       return NextResponse.json(
@@ -63,18 +71,22 @@ export async function POST(request: Request) {
     const seenNames = new Map<string, number>();
     const zip = new JSZip();
 
-    for (const row of rowsToRender) {
-      const normalizedText = normalizeText(row.text);
-      if (!normalizedText) {
-        continue;
-      }
+    const baseFileName = buildCompositeBaseFileName(title);
+    const renderedSteps = await renderCumulativePanelPngs(rowsToRender);
 
+    for (const step of renderedSteps) {
       const fileName = uniquifyFilename(
-        buildFileName(title, normalizedText),
+        buildCompositeFileName(baseFileName, step.panelCount),
         seenNames,
       );
-      const png = await renderRowPng(normalizedText, row.symbols);
-      zip.file(fileName, png);
+      zip.file(fileName, step.png);
+    }
+
+    if (zip.file(/.*/).length === 0) {
+      return NextResponse.json(
+        { error: "Add text to at least one row before generating images." },
+        { status: 400 },
+      );
     }
 
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
@@ -139,10 +151,12 @@ function normalizeText(value: string) {
     .join("\n");
 }
 
-function buildFileName(title: string, text: string) {
-  const titleComponent = sanitizeFileComponent(title) || "untitled";
-  const textComponent = sanitizeFileComponent(text.replace(/\n/g, " ")) || "row";
-  return `${titleComponent}_${textComponent}.png`;
+function buildCompositeBaseFileName(title: string) {
+  return sanitizeFileComponent(title) || "generated-images";
+}
+
+function buildCompositeFileName(baseName: string, panelCount: number) {
+  return `${baseName}_panels_1_to_${panelCount}.png`;
 }
 
 function sanitizeFileComponent(value: string) {
@@ -171,19 +185,75 @@ function uniquifyFilename(filename: string, seenNames: Map<string, number>) {
   return candidate;
 }
 
-async function renderRowPng(text: string, symbols: RequestRow["symbols"]) {
+async function renderCumulativePanelPngs(rows: RequestRow[]) {
+  const renderedPanels = await Promise.all(
+    rows.map(async (row) => ({
+      png: await renderPanelPng(row.text, row.symbols),
+    })),
+  );
+  const panelWidths = await Promise.all(
+    renderedPanels.map(async ({ png }) => sharp(png).metadata()),
+  );
+  const fullWidth =
+    Math.max(...panelWidths.map((metadata) => metadata.width ?? 0)) +
+    OUTER_PADDING * 2;
+  const fullHeight =
+    panelWidths.reduce((sum, metadata) => sum + (metadata.height ?? 0), 0) +
+    Math.max(0, renderedPanels.length - 1) * PANEL_GAP +
+    OUTER_PADDING * 2;
+
+  return Promise.all(
+    renderedPanels.map(async (_, index) => {
+      let currentTop = OUTER_PADDING;
+      const composites = renderedPanels
+        .slice(0, index + 1)
+        .map(({ png }) => png);
+      const layers = [];
+
+      for (const panel of composites) {
+        const metadata = await sharp(panel).metadata();
+        layers.push({
+          input: panel,
+          top: currentTop,
+          left: OUTER_PADDING,
+        });
+        currentTop += (metadata.height ?? 0) + PANEL_GAP;
+      }
+
+      const png = await sharp({
+        create: {
+          width: fullWidth,
+          height: fullHeight,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        },
+      })
+        .composite(layers)
+        .png()
+        .toBuffer();
+
+      return {
+        panelCount: index + 1,
+        png,
+      };
+    }),
+  );
+}
+
+async function renderPanelPng(text: string, symbols: RequestRow["symbols"]) {
   const font = await getEmbeddedFont();
-  const visibleSymbols = symbols.filter((symbol) => symbol !== "-");
+  const visibleSymbols = symbols.filter(
+    (symbol): symbol is Exclude<SymbolOption, "-"> => symbol !== "-",
+  );
   const lines = text.split("\n");
   const metrics = measureLines(lines, font);
   const textBlockHeight =
     metrics.totalHeight + (lines.length - 1) * TEXT_LINE_SPACING;
   const textHeight = textBlockHeight + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING;
-  const canvasHeight = textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING;
-
+  const panelHeight = textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING;
   const svg = `
-    <svg width="${CANVAS_WIDTH}" height="${canvasHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="100%" height="100%" fill="${BACKGROUND}" />
+    <svg width="${CANVAS_WIDTH}" height="${panelHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${panelHeight}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="${BACKGROUND}" stroke="${PINK}" stroke-width="${PANEL_BORDER_WIDTH}" />
       ${renderTextPaths(lines, font, metrics)}
       ${renderSymbols(visibleSymbols, textHeight)}
     </svg>
@@ -192,7 +262,12 @@ async function renderRowPng(text: string, symbols: RequestRow["symbols"]) {
   return await sharp(Buffer.from(svg, "utf8")).png().toBuffer();
 }
 
-function renderSymbols(symbols: SymbolOption[], textHeight: number) {
+function renderSymbols(
+  symbols: Array<Exclude<SymbolOption, "-">>,
+  textHeight: number,
+  offsetX = 0,
+  offsetY = 0,
+) {
   if (symbols.length === 0) {
     return "";
   }
@@ -207,14 +282,14 @@ function renderSymbols(symbols: SymbolOption[], textHeight: number) {
       const left = startX + index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING);
       switch (symbol) {
         case "circle":
-          return `<circle cx="${left + SYMBOL_WIDTH / 2}" cy="${topY + SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
+          return `<circle cx="${offsetX + left + SYMBOL_WIDTH / 2}" cy="${offsetY + topY + SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
         case "cross":
           return [
-            `<line x1="${left + 18}" y1="${topY + 18}" x2="${left + SYMBOL_WIDTH - 18}" y2="${topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,
-            `<line x1="${left + SYMBOL_WIDTH - 18}" y1="${topY + 18}" x2="${left + 18}" y2="${topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,
+            `<line x1="${offsetX + left + 18}" y1="${offsetY + topY + 18}" x2="${offsetX + left + SYMBOL_WIDTH - 18}" y2="${offsetY + topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,
+            `<line x1="${offsetX + left + SYMBOL_WIDTH - 18}" y1="${offsetY + topY + 18}" x2="${offsetX + left + 18}" y2="${offsetY + topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,
           ].join("");
         case "triangle":
-          return `<polygon points="${left + SYMBOL_WIDTH / 2},${topY + 8} ${left + SYMBOL_WIDTH - 10},${topY + SYMBOL_WIDTH - 12} ${left + 10},${topY + SYMBOL_WIDTH - 12}" fill="none" stroke="${ORANGE}" stroke-width="${SYMBOL_STROKE}" stroke-linejoin="miter" />`;
+          return `<polygon points="${offsetX + left + SYMBOL_WIDTH / 2},${offsetY + topY + 8} ${offsetX + left + SYMBOL_WIDTH - 10},${offsetY + topY + SYMBOL_WIDTH - 12} ${offsetX + left + 10},${offsetY + topY + SYMBOL_WIDTH - 12}" fill="none" stroke="${ORANGE}" stroke-width="${SYMBOL_STROKE}" stroke-linejoin="miter" />`;
         default:
           return "";
       }
@@ -258,14 +333,16 @@ function renderTextPaths(
     lineMetrics: Array<{ width: number; height: number; top: number }>;
     totalHeight: number;
   },
+  offsetX = 0,
+  offsetY = 0,
 ) {
   let currentTop = TEXT_TOP_PADDING;
 
   return lines
     .map((line, index) => {
       const lineMetric = metrics.lineMetrics[index];
-      const x = (CANVAS_WIDTH - lineMetric.width) / 2;
-      const baselineY = currentTop - lineMetric.top;
+      const x = offsetX + (CANVAS_WIDTH - lineMetric.width) / 2;
+      const baselineY = offsetY + currentTop - lineMetric.top;
       currentTop += lineMetric.height + TEXT_LINE_SPACING;
 
       const pathData = font
