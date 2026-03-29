@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 const SYMBOL_VALUES = new Set(["-", "circle", "cross", "triangle"]);
 
 const CANVAS_WIDTH = 850;
-const TEXT_TOP_PADDING = 5;
+const TEXT_TOP_PADDING = 13;
 const TEXT_BOTTOM_PADDING = 28;
 const BOTTOM_PADDING = 24;
 const TEXT_SIZE = 200;
@@ -20,6 +20,7 @@ const SYMBOL_TOP_GAP = 5;
 const OUTER_PADDING = 28;
 const PANEL_GAP = 8;
 const PANEL_BORDER_WIDTH = 8;
+const CIRCLE_RADIUS_BONUS = 8;
 
 const TEXT_COLOR = "#000000";
 const BACKGROUND = "#FFFFFF";
@@ -282,7 +283,7 @@ function renderSymbols(
       const left = startX + index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING);
       switch (symbol) {
         case "circle":
-          return `<circle cx="${offsetX + left + SYMBOL_WIDTH / 2}" cy="${offsetY + topY + SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
+          return `<circle cx="${offsetX + left + SYMBOL_WIDTH / 2}" cy="${offsetY + topY + SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2 + CIRCLE_RADIUS_BONUS}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
         case "cross":
           return [
             `<line x1="${offsetX + left + 18}" y1="${offsetY + topY + 18}" x2="${offsetX + left + SYMBOL_WIDTH - 18}" y2="${offsetY + topY + SYMBOL_WIDTH - 18}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12}" stroke-linecap="square" />`,

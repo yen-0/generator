@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 CANVAS_WIDTH = 850
-TEXT_TOP_PADDING = 36
+TEXT_TOP_PADDING = 44
 TEXT_BOTTOM_PADDING = 28
 BOTTOM_PADDING = 24
 TEXT_SIZE = 200
@@ -22,6 +22,7 @@ SYMBOL_TOP_GAP = 5
 OUTER_PADDING = 28
 PANEL_GAP = 8
 PANEL_BORDER_WIDTH = 8
+CIRCLE_INSET = 6
 
 BLUE = "#2166F3"
 RED = "#E23D2E"
@@ -212,7 +213,12 @@ def draw_symbol_block(
 
 
 def draw_circle(draw: ImageDraw.ImageDraw, left: float, top: float) -> None:
-    bounds = [left, top, left + SYMBOL_WIDTH, top + SYMBOL_WIDTH]
+    bounds = [
+        left + CIRCLE_INSET,
+        top + CIRCLE_INSET,
+        left + SYMBOL_WIDTH - CIRCLE_INSET,
+        top + SYMBOL_WIDTH - CIRCLE_INSET,
+    ]
     draw.ellipse(bounds, outline=BLUE, width=SYMBOL_STROKE)
 
 
