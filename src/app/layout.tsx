@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "画像シート生成",
-  description: "表形式で入力してPNG画像をまとめて生成します。",
+  description: "日本語入力に合わせた4モードのPNG生成ツールです。",
 };
 
 export default function RootLayout({

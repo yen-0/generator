@@ -1,16 +1,16 @@
 :root {
-  --background: #f2efe8;
-  --foreground: #16120d;
-  --surface: rgba(255, 252, 246, 0.88);
+  --background: #f4efe7;
+  --foreground: #17120d;
+  --surface: rgba(255, 252, 246, 0.9);
   --surface-strong: #fffdfa;
-  --grid: #d4c7b3;
-  --grid-strong: #b79f7e;
-  --accent: #8c4f1f;
-  --accent-strong: #58331a;
-  --muted: #6d6256;
+  --grid: #d7c8b5;
+  --grid-strong: #bea481;
+  --accent: #91531f;
+  --accent-strong: #56331b;
+  --muted: #6f6356;
   --success: #1f6b47;
   --danger: #9f3128;
-  --shadow: 0 24px 50px rgba(73, 43, 22, 0.12);
+  --shadow: 0 26px 52px rgba(73, 43, 22, 0.12);
 }
 
 html {
@@ -27,10 +27,10 @@ body {
   min-height: 100%;
   color: var(--foreground);
   background:
-    radial-gradient(circle at top left, rgba(253, 214, 159, 0.65), transparent 30%),
-    radial-gradient(circle at top right, rgba(225, 194, 233, 0.28), transparent 22%),
-    linear-gradient(180deg, #efe4d1 0%, #f7f4ed 48%, #ece3d5 100%);
-  font-family: "Segoe UI", "Aptos", "Helvetica Neue", sans-serif;
+    radial-gradient(circle at top left, rgba(255, 222, 168, 0.72), transparent 28%),
+    radial-gradient(circle at top right, rgba(228, 205, 234, 0.22), transparent 24%),
+    linear-gradient(180deg, #efe4d1 0%, #f8f4ee 48%, #ede1d1 100%);
+  font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
