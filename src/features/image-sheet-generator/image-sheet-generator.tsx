@@ -43,6 +43,7 @@ type Row = {
   symbols: [SymbolOption, SymbolOption, SymbolOption];
   numerator: number;
   denominator: number;
+  fontSize: number;
 };
 
 const INITIAL_ROWS: Row[] = Array.from({ length: 7 }, (_, index) => ({
@@ -51,6 +52,7 @@ const INITIAL_ROWS: Row[] = Array.from({ length: 7 }, (_, index) => ({
   symbols: ["-", "-", "-"],
   numerator: index + 1,
   denominator: 7,
+  fontSize: 400,
 }));
 
 function createRow(id: number, numerator = 1): Row {
@@ -60,6 +62,7 @@ function createRow(id: number, numerator = 1): Row {
     symbols: ["-", "-", "-"],
     numerator,
     denominator: 7,
+    fontSize: 400,
   };
 }
 
@@ -102,6 +105,17 @@ export function ImageSheetGenerator() {
       current.map((row) =>
         row.id === id
           ? { ...row, [field]: Number.isFinite(parsed) ? parsed : row[field] }
+          : row,
+      ),
+    );
+  }
+
+  function updateRowFontSize(id: number, value: string) {
+    const parsed = Number.parseInt(value, 10);
+    setRows((current) =>
+      current.map((row) =>
+        row.id === id
+          ? { ...row, fontSize: Number.isFinite(parsed) ? Math.max(1, parsed) : row.fontSize }
           : row,
       ),
     );
@@ -263,6 +277,7 @@ export function ImageSheetGenerator() {
                   <th>記号 1</th>
                   <th>記号 2</th>
                   <th>記号 3</th>
+                  <th>文字サイズ</th>
                   <th>分子</th>
                   <th>分母</th>
                   <th className={styles.controlHeader}>操作</th>
@@ -302,6 +317,15 @@ export function ImageSheetGenerator() {
                         </select>
                       </td>
                     ))}
+                    <td>
+                      <input
+                        className={styles.numberInput}
+                        type="number"
+                        min={1}
+                        value={row.fontSize}
+                        onChange={(event) => updateRowFontSize(row.id, event.target.value)}
+                      />
+                    </td>
                     <td>
                       <input
                         className={styles.numberInput}

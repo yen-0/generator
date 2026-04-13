@@ -76,6 +76,7 @@ type Mode = "all" | "text" | "title" | "oo";
 type RequestRow = {
   text: string;
   symbols: [SymbolOption, SymbolOption, SymbolOption];
+  fontSize: number;
   numerator: number;
   denominator: number;
 };
@@ -97,6 +98,7 @@ export async function POST(request: Request) {
     const rowsToRender = rows.map((row) => ({
       text: normalizeText(row.text),
       symbols: row.symbols,
+      fontSize: row.fontSize,
       numerator: row.numerator,
       denominator: row.denominator,
     }));
@@ -150,16 +152,21 @@ function validateRows(value: unknown): RequestRow[] {
   }
 
   return value.map((row) => {
+    const fontSizeValue = (row as { fontSize?: unknown }).fontSize;
+
     if (
       typeof row !== "object" ||
       row === null ||
       typeof (row as { text?: unknown }).text !== "string" ||
       !Array.isArray((row as { symbols?: unknown }).symbols) ||
       (row as { symbols: unknown[] }).symbols.length !== 3 ||
+      (typeof fontSizeValue !== "undefined" && typeof fontSizeValue !== "number") ||
       typeof (row as { numerator?: unknown }).numerator !== "number" ||
       typeof (row as { denominator?: unknown }).denominator !== "number"
     ) {
-      throw new Error("Each row must include text, three symbols, numerator, and denominator.");
+      throw new Error(
+        "Each row must include text, three symbols, numerator, denominator, and an optional font size.",
+      );
     }
 
     const symbols = (row as { symbols: unknown[] }).symbols.map((symbol) => {
@@ -173,10 +180,19 @@ function validateRows(value: unknown): RequestRow[] {
     return {
       text: (row as { text: string }).text,
       symbols,
+      fontSize: normalizeFontSize(fontSizeValue as number | undefined),
       numerator: Math.max(1, Math.trunc((row as { numerator: number }).numerator)),
       denominator: Math.max(1, Math.trunc((row as { denominator: number }).denominator)),
     };
   });
+}
+
+function normalizeFontSize(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return TEXT_SIZE;
+  }
+
+  return Math.max(1, Math.trunc(value));
 }
 
 function normalizeText(value: string) {
@@ -340,7 +356,7 @@ async function renderModeOnePanels(
 async function renderCumulativePanelPngs(rows: RequestRow[]) {
   const renderedPanels = await Promise.all(
     rows.map(async (row) => ({
-      png: await renderTextPanelPng(row.text, row.symbols),
+      png: await renderTextPanelPng(row.text, row.symbols, row.fontSize),
     })),
   );
   const panelWidths = await Promise.all(renderedPanels.map(async ({ png }) => sharp(png).metadata()));
@@ -385,20 +401,25 @@ async function renderOoPanels(rows: RequestRow[]) {
   return Promise.all(rows.map(async (row) => renderOoPanelPng(row.numerator, row.denominator)));
 }
 
-async function renderTextPanelPng(text: string, symbols: RequestRow["symbols"]) {
+async function renderTextPanelPng(
+  text: string,
+  symbols: RequestRow["symbols"],
+  fontSize: number,
+) {
   const font = await getEmbeddedFont();
   const visibleSymbols = symbols.filter(
     (symbol): symbol is Exclude<SymbolOption, "-"> => symbol !== "-",
   );
   const lines = text.split("\n");
-  const metrics = measureLines(lines, font);
+  const normalizedFontSize = normalizeFontSize(fontSize);
+  const metrics = measureLines(lines, font, normalizedFontSize);
   const textBlockHeight = metrics.totalHeight + (lines.length - 1) * TEXT_LINE_SPACING;
   const textHeight = textBlockHeight + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING;
   const panelHeight = textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH + BOTTOM_PADDING;
   const svg = `
     <svg width="${CANVAS_WIDTH}" height="${panelHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${panelHeight}" xmlns="http://www.w3.org/2000/svg">
       <rect width="100%" height="100%" fill="${BACKGROUND}" stroke="${PINK}" stroke-width="${PANEL_BORDER_WIDTH}" />
-      ${renderTextPaths(lines, font, metrics)}
+      ${renderTextPaths(lines, font, metrics, normalizedFontSize)}
       ${renderSymbols(visibleSymbols, textHeight)}
     </svg>
   `;
@@ -567,6 +588,7 @@ function renderTextPaths(
     lineMetrics: Array<{ left: number; width: number; height: number; top: number }>;
     totalHeight: number;
   },
+  fontSize: number,
   offsetX = 0,
   offsetY = 0,
 ) {
@@ -580,20 +602,20 @@ function renderTextPaths(
       const baselineY = offsetY + currentTop - lineMetric.top;
       currentTop += lineMetric.height + TEXT_LINE_SPACING;
 
-      const pathData = font.getPath(line, x, baselineY, TEXT_SIZE).toPathData(3);
+      const pathData = font.getPath(line, x, baselineY, fontSize).toPathData(3);
       return `<path d="${pathData}" fill="${TEXT_COLOR}" />`;
     })
     .join("");
 }
 
-function measureLines(lines: string[], font: Font) {
+function measureLines(lines: string[], font: Font, fontSize: number) {
   const lineMetrics = lines.map((line) => {
-    const path = font.getPath(line, 0, 0, TEXT_SIZE);
+    const path = font.getPath(line, 0, 0, fontSize);
     const box = path.getBoundingBox();
     return {
       left: box.x1,
       width: Math.max(0, box.x2 - box.x1),
-      height: Math.max(TEXT_SIZE, box.y2 - box.y1),
+      height: Math.max(fontSize, box.y2 - box.y1),
       top: box.y1,
     };
   });
