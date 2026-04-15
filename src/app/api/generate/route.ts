@@ -5,7 +5,7 @@ import opentype, { type Font } from "opentype.js";
 import sharp from "sharp";
 import { NextResponse } from "next/server";
 
-const SYMBOL_VALUES = new Set(["-", "circle", "cross", "triangle"]);
+const SYMBOL_VALUES = new Set(["-", "circle", "cross", "triangle", "?"]);
 const MODES = new Set(["all", "text", "title", "oo"]);
 const RENDER_SCALE = 2;
 const OO_RENDER_SCALE = 3;
@@ -41,6 +41,8 @@ const OO_BOX_PADDING_Y = 6 * OO_RENDER_SCALE;
 const OO_BOX_FONT_SIZE = 163 * OO_RENDER_SCALE;
 const OO_SLASH_FONT_SCALE = 0.65;
 const OO_BOX_BORDER = 2 * OO_RENDER_SCALE;
+const QUESTION_FONT_SCALE = 1.15;
+const QUESTION_STROKE_WIDTH = 3 * RENDER_SCALE;
 
 const TEXT_COLOR = "#000000";
 const BACKGROUND = "#FFFFFF";
@@ -48,6 +50,7 @@ const BLUE = "#2166F3";
 const RED = "#E23D2E";
 const ORANGE = "#F28C28";
 const PINK = "#FF9CC8";
+const QUESTION_PURPLE = "#9e00fe";
 const GOLD_TOP = "#f8e8a6";
 const GOLD_MID = "#d6a33d";
 const GOLD_BOTTOM = "#8d5f11";
@@ -61,6 +64,12 @@ const EMBEDDED_FONT_PATH = path.join(
   "files",
   "noto-sans-jp-japanese-700-normal.woff",
 );
+const QUESTION_FONT_PATH = path.join(
+  process.cwd(),
+  "public",
+  "fonts",
+  "question-mark-biz-udgothic-japanese-700-normal.woff",
+);
 const OO_MINCHO_FONT_PATH = path.join(
   process.cwd(),
   "node_modules",
@@ -70,7 +79,7 @@ const OO_MINCHO_FONT_PATH = path.join(
   "shippori-mincho-japanese-700-normal.woff",
 );
 
-type SymbolOption = "-" | "circle" | "cross" | "triangle";
+type SymbolOption = "-" | "circle" | "cross" | "triangle" | "?";
 type Mode = "all" | "text" | "title" | "oo";
 
 type RequestRow = {
@@ -83,6 +92,7 @@ type RequestRow = {
 
 let embeddedFontPromise: Promise<Font> | null = null;
 let ooMinchoFontPromise: Promise<Font> | null = null;
+let questionFontPromise: Promise<Font> | null = null;
 
 export async function POST(request: Request) {
   try {
@@ -420,7 +430,7 @@ async function renderTextPanelPng(
     <svg width="${CANVAS_WIDTH}" height="${panelHeight}" viewBox="0 0 ${CANVAS_WIDTH} ${panelHeight}" xmlns="http://www.w3.org/2000/svg">
       <rect width="100%" height="100%" fill="${BACKGROUND}" stroke="${PINK}" stroke-width="${PANEL_BORDER_WIDTH}" />
       ${renderTextPaths(lines, font, metrics, normalizedFontSize)}
-      ${renderSymbols(visibleSymbols, textHeight)}
+      ${await renderSymbols(visibleSymbols, textHeight)}
     </svg>
   `;
 
@@ -546,7 +556,7 @@ function centerPathInBox(bounds: { x1: number; y1: number; x2: number; y2: numbe
   };
 }
 
-function renderSymbols(
+async function renderSymbols(
   symbols: Array<Exclude<SymbolOption, "-">>,
   textHeight: number,
   offsetX = 0,
@@ -561,8 +571,8 @@ function renderSymbols(
   const startX = (CANVAS_WIDTH - totalWidth) / 2;
   const topY = textHeight + SYMBOL_TOP_GAP;
 
-  return symbols
-    .map((symbol, index) => {
+  return Promise.all(
+    symbols.map(async (symbol, index) => {
       const left = startX + index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING);
       switch (symbol) {
         case "circle":
@@ -574,11 +584,38 @@ function renderSymbols(
           ].join("");
         case "triangle":
           return `<polygon points="${offsetX + left + SYMBOL_WIDTH / 2},${offsetY + topY + 8 * RENDER_SCALE} ${offsetX + left + SYMBOL_WIDTH - 10 * RENDER_SCALE},${offsetY + topY + SYMBOL_WIDTH - 12 * RENDER_SCALE} ${offsetX + left + 10 * RENDER_SCALE},${offsetY + topY + SYMBOL_WIDTH - 12 * RENDER_SCALE}" fill="none" stroke="${ORANGE}" stroke-width="${SYMBOL_STROKE}" stroke-linejoin="miter" />`;
+        case "?": {
+          const questionFont = await getQuestionFont();
+          const questionFontSize = Math.round(fitSymbolFontSize("?", questionFont) * QUESTION_FONT_SCALE);
+          const questionPath = questionFont.getPath("?", 0, 0, questionFontSize);
+          const questionBounds = questionPath.getBoundingBox();
+          const targetCenterX = offsetX + left + SYMBOL_WIDTH / 2;
+          const targetCenterY = offsetY + topY + SYMBOL_WIDTH / 2;
+          const scaleX = 2;
+          const dx = targetCenterX - (scaleX * (questionBounds.x1 + questionBounds.x2)) / 2;
+          const dy = targetCenterY - (questionBounds.y1 + questionBounds.y2) / 2;
+          return `<path d="${questionPath.toPathData(3)}" fill="${QUESTION_PURPLE}" stroke="${QUESTION_PURPLE}" stroke-width="${QUESTION_STROKE_WIDTH}" paint-order="stroke fill" transform="matrix(${scaleX} 0 0 1 ${dx} ${dy})" />`;
+        }
         default:
           return "";
       }
-    })
-    .join("");
+    }),
+  ).then((parts) => parts.join(""));
+}
+
+function fitSymbolFontSize(glyph: string, font: Font) {
+  const maxTextSize = SYMBOL_WIDTH - SYMBOL_STROKE;
+
+  for (let size = 220 * RENDER_SCALE; size >= 64 * RENDER_SCALE; size -= 2 * RENDER_SCALE) {
+    const bounds = font.getPath(glyph, 0, 0, size).getBoundingBox();
+    const width = Math.max(0, bounds.x2 - bounds.x1);
+    const height = Math.max(0, bounds.y2 - bounds.y1);
+    if (width <= maxTextSize && height <= maxTextSize) {
+      return size;
+    }
+  }
+
+  return 64 * RENDER_SCALE;
 }
 
 function renderTextPaths(
@@ -651,6 +688,18 @@ async function getEmbeddedFont() {
   }
 
   return embeddedFontPromise;
+}
+
+async function getQuestionFont() {
+  if (!questionFontPromise) {
+    questionFontPromise = readFile(QUESTION_FONT_PATH).then((fontBuffer) =>
+      opentype.parse(
+        fontBuffer.buffer.slice(fontBuffer.byteOffset, fontBuffer.byteOffset + fontBuffer.byteLength),
+      ),
+    );
+  }
+
+  return questionFontPromise;
 }
 
 async function getOoMinchoFont() {

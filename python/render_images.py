@@ -5,12 +5,14 @@ import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from PIL import ImageFilter
 
 CANVAS_WIDTH = 850
 TEXT_TOP_PADDING = 44
 TEXT_BOTTOM_PADDING = 28
 BOTTOM_PADDING = 24
 TEXT_SIZE = 200
+SYMBOL_TEXT_SIZE = 132
 TEXT_LINE_SPACING = 5
 TEXT_COLOR = "#000000"
 BACKGROUND = "#FFFFFF"
@@ -23,11 +25,19 @@ OUTER_PADDING = 28
 PANEL_GAP = 8
 PANEL_BORDER_WIDTH = 8
 CIRCLE_INSET = 6
+QUESTION_FONT_SCALE = 1.15
+QUESTION_FONT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "public"
+    / "fonts"
+    / "question-mark-biz-udgothic-japanese-700-normal.woff"
+)
 
 BLUE = "#2166F3"
 RED = "#E23D2E"
 ORANGE = "#F28C28"
 PINK = "#FF9CC8"
+QUESTION_PURPLE = "#9e00fe"
 
 
 def main() -> None:
@@ -45,6 +55,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     font = load_font(TEXT_SIZE)
+    question_font = load_font_from_path(QUESTION_FONT_PATH, round(SYMBOL_TEXT_SIZE * QUESTION_FONT_SCALE))
     files: list[dict[str, str]] = []
     seen_names: dict[str, int] = {}
 
@@ -54,7 +65,7 @@ def main() -> None:
         if (text := normalize_text(row.get("text", "")))
     ]
 
-    for panel_count, image in render_images(normalized_rows, font):
+    for panel_count, image in render_images(normalized_rows, font, question_font):
         filename = uniquify_filename(
             build_composite_filename(build_filename_base(title), panel_count),
             seen_names,
@@ -99,6 +110,16 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def load_font_from_path(
+    font_path: Path,
+    size: int,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    try:
+        return ImageFont.truetype(str(font_path), size=size)
+    except OSError:
+        return load_font(size)
+
+
 def build_filename_base(title: str) -> str:
     return sanitize_filename(title) or "generated-images"
 
@@ -117,12 +138,14 @@ def sanitize_filename(value: str) -> str:
 def render_images(
     rows: list[dict[str, object]],
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    question_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
 ) -> list[tuple[int, Image.Image]]:
     panel_images = [
         render_panel_image(
             row["text"],
             row["symbols"],
             font,
+            question_font,
         )
         for row in rows
     ]
@@ -152,6 +175,7 @@ def render_panel_image(
     text: object,
     symbols: object,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    question_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
 ) -> Image.Image:
     text_value = text if isinstance(text, str) else ""
     symbol_values = [symbol for symbol in symbols if symbol != "-"] if isinstance(symbols, list) else []
@@ -166,7 +190,7 @@ def render_panel_image(
         width=PANEL_BORDER_WIDTH,
     )
     draw_text_block(draw, text_value, font, text_bbox)
-    draw_symbol_block(draw, symbol_values, text_height)
+    draw_symbol_block(image, draw, symbol_values, text_height, question_font)
     return image
 
 
@@ -190,9 +214,11 @@ def draw_text_block(
 
 
 def draw_symbol_block(
+    image: Image.Image,
     draw: ImageDraw.ImageDraw,
     symbols: list[str],
     text_height: int,
+    question_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
 ) -> None:
     if not symbols:
         return
@@ -210,6 +236,8 @@ def draw_symbol_block(
             draw_cross(draw, left, top_y)
         elif symbol == "triangle":
             draw_triangle(draw, left, top_y)
+        elif symbol == "?":
+            draw_question(image, draw, left, top_y, question_font)
 
 
 def draw_circle(draw: ImageDraw.ImageDraw, left: float, top: float) -> None:
@@ -247,6 +275,26 @@ def draw_triangle(draw: ImageDraw.ImageDraw, left: float, top: float) -> None:
         (left + 10, bottom - 12),
     ]
     draw.polygon(points, outline=ORANGE, width=SYMBOL_STROKE)
+
+
+def draw_question(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    left: float,
+    top: float,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> None:
+    bbox = draw.textbbox((0, 0), "?", font=font)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    temp = Image.new("RGBA", (max(1, width), max(1, height)), TRANSPARENT)
+    temp_draw = ImageDraw.Draw(temp)
+    temp_draw.text((-bbox[0], -bbox[1]), "?", fill=QUESTION_PURPLE, font=font)
+    stretched = temp.resize((max(1, round(width * 2)), max(1, height)), resample=Image.Resampling.LANCZOS)
+    stretched = stretched.filter(ImageFilter.MaxFilter(3))
+    x = left + (SYMBOL_WIDTH - stretched.width) / 2
+    y = top + (SYMBOL_WIDTH - stretched.height) / 2
+    image.alpha_composite(stretched, (int(round(x)), int(round(y))))
 
 
 def uniquify_filename(filename: str, seen_names: dict[str, int]) -> str:

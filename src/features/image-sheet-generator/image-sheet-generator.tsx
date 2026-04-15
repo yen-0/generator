@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import styles from "./image-sheet-generator.module.css";
 
-const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle"] as const;
+const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?"] as const;
 const MODE_OPTIONS = [
   {
     value: "all",
@@ -35,6 +35,7 @@ const SYMBOL_LABELS: Record<SymbolOption, string> = {
   circle: "〇",
   cross: "✕",
   triangle: "△",
+  "?": "?",
 };
 
 type Row = {
