@@ -29,6 +29,7 @@ const MODE_OPTIONS = [
 
 type SymbolOption = (typeof SYMBOL_OPTIONS)[number];
 type Mode = (typeof MODE_OPTIONS)[number]["value"];
+type DenominatorMode = 7 | 10;
 
 const SYMBOL_LABELS: Record<SymbolOption, string> = {
   "-": "なし",
@@ -47,29 +48,34 @@ type Row = {
   fontSize: number;
 };
 
-const INITIAL_ROWS: Row[] = Array.from({ length: 7 }, (_, index) => ({
-  id: index + 1,
-  text: "",
-  symbols: ["-", "-", "-"],
-  numerator: index + 1,
-  denominator: 7,
-  fontSize: 400,
-}));
+function createDefaultRows(denominator: DenominatorMode): Row[] {
+  return Array.from({ length: denominator }, (_, index) => ({
+    id: index + 1,
+    text: "",
+    symbols: ["-", "-", "-"] as Row["symbols"],
+    numerator: index + 1,
+    denominator,
+    fontSize: 400,
+  }));
+}
 
-function createRow(id: number, numerator = 1): Row {
+function createRow(id: number, numerator = 1, denominator: DenominatorMode = 7): Row {
   return {
     id,
     text: "",
     symbols: ["-", "-", "-"],
     numerator,
-    denominator: 7,
+    denominator,
     fontSize: 400,
   };
 }
 
+const INITIAL_ROWS: Row[] = createDefaultRows(7);
+
 export function ImageSheetGenerator() {
   const [mode, setMode] = useState<Mode>("all");
   const [title, setTitle] = useState("");
+  const [denominatorMode, setDenominatorMode] = useState<DenominatorMode>(7);
   const [rows, setRows] = useState(INITIAL_ROWS);
   const [nextId, setNextId] = useState(INITIAL_ROWS.length + 1);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -111,6 +117,24 @@ export function ImageSheetGenerator() {
     );
   }
 
+  function updateDenominatorMode(value: DenominatorMode) {
+    setDenominatorMode(value);
+    setRows((current) => {
+      const nextRows = current.slice(0, value).map((row, index) => ({
+        ...row,
+        numerator: index + 1,
+        denominator: value,
+      }));
+
+      while (nextRows.length < value) {
+        nextRows.push(createRow(nextRows.length + 1, nextRows.length + 1, value));
+      }
+
+      return nextRows;
+    });
+    setNextId((current) => Math.max(current, value + 1));
+  }
+
   function updateRowFontSize(id: number, value: string) {
     const parsed = Number.parseInt(value, 10);
     setRows((current) =>
@@ -123,7 +147,7 @@ export function ImageSheetGenerator() {
   }
 
   function addRow() {
-    setRows((current) => [...current, createRow(nextId, current.length + 1)]);
+    setRows((current) => [...current, createRow(nextId, current.length + 1, denominatorMode)]);
     setNextId((current) => current + 1);
   }
 
@@ -151,6 +175,7 @@ export function ImageSheetGenerator() {
         body: JSON.stringify({
           mode,
           title,
+          denominatorMode,
           rows,
         }),
       });
@@ -263,10 +288,34 @@ export function ImageSheetGenerator() {
             </div>
           </section>
 
+          <section className={styles.denominatorSection} aria-label="denominator selector">
+            <div className={styles.denominatorTitleRow}>
+              <h2>分母設定</h2>
+              <p>7 と 10 を切り替えると、行数と分母の既定値が変わります。</p>
+            </div>
+            <div className={styles.denominatorTabs} role="tablist" aria-label="denominator modes">
+              {([7, 10] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="tab"
+                  aria-selected={denominatorMode === option}
+                  className={
+                    denominatorMode === option ? styles.denominatorTabActive : styles.denominatorTab
+                  }
+                  onClick={() => updateDenominatorMode(option)}
+                >
+                  <strong>{option}</strong>
+                  <span>{option} 行を既定にします</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           <div className={styles.metaRow}>
             <span>{rows.length} 行</span>
             <span>{filledRowCount} 行が入力済み</span>
-            <span>mode 1 は 7 行を基準に合成します</span>
+            <span>mode 1 は {denominatorMode} 行を基準に合成します</span>
           </div>
 
           <div className={styles.tableWrap}>
@@ -344,9 +393,7 @@ export function ImageSheetGenerator() {
                         type="number"
                         min={1}
                         value={row.denominator}
-                        onChange={(event) =>
-                          updateRowNumber(row.id, "denominator", event.target.value)
-                        }
+                        readOnly
                       />
                     </td>
                     <td className={styles.rowActionCell}>

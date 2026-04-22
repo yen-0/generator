@@ -248,6 +248,14 @@
   margin-bottom: 18px;
 }
 
+.denominatorSection {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid rgba(120, 84, 39, 0.12);
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(251, 246, 238, 0.9), rgba(245, 236, 224, 0.9));
+}
+
 .modeTitleRow {
   display: flex;
   align-items: end;
@@ -263,6 +271,25 @@
 }
 
 .modeTitleRow p {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.denominatorTitleRow {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.denominatorTitleRow h2 {
+  color: var(--accent-strong);
+  font-size: 1.02rem;
+  font-weight: 800;
+}
+
+.denominatorTitleRow p {
   color: var(--muted);
   font-size: 0.9rem;
 }
@@ -308,6 +335,50 @@
 }
 
 .modeTabActive span {
+  color: rgba(255, 246, 235, 0.88);
+}
+
+.denominatorTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.denominatorTab,
+.denominatorTabActive {
+  min-height: 64px;
+  padding: 14px 16px;
+  border: 1px solid rgba(96, 76, 52, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fbf6ee, #f4eadc);
+  color: var(--accent-strong);
+  cursor: pointer;
+  text-align: left;
+}
+
+.denominatorTab strong,
+.denominatorTabActive strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 1.1rem;
+}
+
+.denominatorTab span,
+.denominatorTabActive span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.35;
+}
+
+.denominatorTabActive {
+  border-color: rgba(171, 97, 32, 0.3);
+  background: linear-gradient(135deg, #be7331, #8b4319);
+  color: #fffaf5;
+  box-shadow: 0 12px 24px rgba(139, 67, 25, 0.2);
+}
+
+.denominatorTabActive span {
   color: rgba(255, 246, 235, 0.88);
 }
 
@@ -447,6 +518,10 @@
   .modeTabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .denominatorTabs {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -466,6 +541,10 @@
 
   .modeTabs {
     grid-template-columns: 1fr;
+  }
+
+  .denominatorSection {
+    padding: 14px;
   }
 
   .actions {

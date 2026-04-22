@@ -35,14 +35,11 @@ const TITLE_MAX_FONT_SIZE = 132 * RENDER_SCALE;
 const OO_BOX_HEIGHT = 72 * OO_RENDER_SCALE;
 // Keep mode 4 panels a consistent width so the box does not expand with the fraction label.
 const OO_BOX_WIDTH = 128 * OO_RENDER_SCALE;
-// Slightly tighter padding keeps the split-box digits a bit more compact.
-const OO_BOX_PADDING_X = 15 * OO_RENDER_SCALE;
-const OO_BOX_PADDING_Y = 6 * OO_RENDER_SCALE;
-const OO_BOX_FONT_SIZE = 163 * OO_RENDER_SCALE;
-const OO_SLASH_FONT_SCALE = 0.65;
 const OO_BOX_BORDER = 2 * OO_RENDER_SCALE;
 const QUESTION_FONT_SCALE = 1.15;
 const QUESTION_STROKE_WIDTH = 3 * RENDER_SCALE;
+const OO_DIGIT_FONT_SIZE = 196;
+const OO_SLASH_FONT_SIZE = 127;
 
 const TEXT_COLOR = "#000000";
 const BACKGROUND = "#FFFFFF";
@@ -99,11 +96,13 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       mode?: unknown;
       title?: unknown;
+      denominatorMode?: unknown;
       rows?: unknown;
     };
 
     const mode = typeof body.mode === "string" && MODES.has(body.mode) ? (body.mode as Mode) : "all";
     const title = typeof body.title === "string" ? body.title : "";
+    const denominatorMode = normalizeDenominatorMode(body.denominatorMode);
     const rows = validateRows(body.rows);
     const rowsToRender = rows.map((row) => ({
       text: normalizeText(row.text),
@@ -117,7 +116,7 @@ export async function POST(request: Request) {
     const baseName = sanitizeFileComponent(title) || "generated-images";
 
     if (mode === "all") {
-      const outputs = await renderAllModeOutputs(title, rowsToRender);
+      const outputs = await renderAllModeOutputs(title, rowsToRender, denominatorMode);
       for (const output of outputs) {
         zip.file(output.fileName, output.png);
       }
@@ -205,6 +204,10 @@ function normalizeFontSize(value: number | undefined) {
   return Math.max(1, Math.trunc(value));
 }
 
+function normalizeDenominatorMode(value: unknown): 7 | 10 {
+  return value === 10 ? 10 : 7;
+}
+
 function normalizeText(value: string) {
   return value
     .replace(/\r\n/g, "\n")
@@ -214,7 +217,7 @@ function normalizeText(value: string) {
     .join("\n");
 }
 
-async function renderAllModeOutputs(title: string, rows: RequestRow[]) {
+async function renderAllModeOutputs(title: string, rows: RequestRow[], denominatorMode: 7 | 10) {
   const [titleBanner, textPanels, ooPanels] = await Promise.all([
     renderTitleBannerPng(title),
     renderCumulativePanelPngs(rows),
@@ -224,7 +227,7 @@ async function renderAllModeOutputs(title: string, rows: RequestRow[]) {
   const modeOneFrames: Array<{ textPanel: Buffer | null; ooPanel: Buffer }> = [
     {
       textPanel: null,
-      ooPanel: await renderOoPanelPng(0, 7),
+      ooPanel: await renderOoPanelPng(0, denominatorMode),
     },
   ];
 
@@ -479,8 +482,9 @@ async function renderOoPanelPng(numerator: number, denominator: number) {
   const font = await getOoMinchoFont();
   const numeratorText = String(numerator);
   const denominatorText = String(denominator);
-  const fontSize = fitOoFontSize([numeratorText, denominatorText], font, OO_BOX_WIDTH / 2);
-  const slashFontSize = Math.max(24 * OO_RENDER_SCALE, Math.round(fontSize * OO_SLASH_FONT_SCALE));
+  const twoDigitScale = numeratorText.length > 1 || denominatorText.length > 1 ? 0.75 : 1;
+  const fontSize = Math.round(OO_DIGIT_FONT_SIZE * twoDigitScale);
+  const slashFontSize = Math.round(OO_SLASH_FONT_SIZE * twoDigitScale);
   const numeratorPath = font.getPath(numeratorText, 0, 0, fontSize);
   const slashPath = font.getPath("/", 0, 0, slashFontSize);
   const denominatorPath = font.getPath(denominatorText, 0, 0, fontSize);
@@ -510,26 +514,6 @@ async function renderOoPanelPng(numerator: number, denominator: number) {
   `;
 
   return sharp(Buffer.from(svg, "utf8")).png().toBuffer();
-}
-
-function fitOoFontSize(labels: string[], font: Font, boxWidth: number) {
-  const maxTextHeight = OO_BOX_HEIGHT - OO_BOX_PADDING_Y * 2;
-  const maxTextWidth = Math.max(1, boxWidth - OO_BOX_PADDING_X * 2);
-
-  for (let size = OO_BOX_FONT_SIZE; size >= 24 * OO_RENDER_SCALE; size -= OO_RENDER_SCALE) {
-    const fits = labels.every((label) => {
-      const bounds = font.getPath(label, 0, 0, size).getBoundingBox();
-      const width = Math.max(0, bounds.x2 - bounds.x1);
-      const height = Math.max(0, bounds.y2 - bounds.y1);
-      return width <= maxTextWidth && height <= maxTextHeight;
-    });
-
-    if (fits) {
-      return size;
-    }
-  }
-
-  return 24 * OO_RENDER_SCALE;
 }
 
 function fitTitleFontSize(title: string, font: Font) {
