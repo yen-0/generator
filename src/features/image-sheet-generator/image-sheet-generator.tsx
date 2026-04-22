@@ -120,7 +120,7 @@ export function ImageSheetGenerator() {
   function updateDenominatorMode(value: DenominatorMode) {
     setDenominatorMode(value);
     setRows((current) => {
-      const nextRows = current.slice(0, value).map((row, index) => ({
+      const nextRows: Row[] = current.slice(0, value).map((row, index) => ({
         ...row,
         numerator: index + 1,
         denominator: value,
