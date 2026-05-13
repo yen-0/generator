@@ -81,7 +81,7 @@ type Mode = "all" | "text" | "title" | "oo";
 
 type RequestRow = {
   text: string;
-  symbols: [SymbolOption, SymbolOption, SymbolOption];
+  symbols: SymbolOption[];
   fontSize: number;
   numerator: number;
   denominator: number;
@@ -97,13 +97,15 @@ export async function POST(request: Request) {
       mode?: unknown;
       title?: unknown;
       denominatorMode?: unknown;
+      symbolColumnCount?: unknown;
       rows?: unknown;
     };
 
     const mode = typeof body.mode === "string" && MODES.has(body.mode) ? (body.mode as Mode) : "all";
     const title = typeof body.title === "string" ? body.title : "";
     const denominatorMode = normalizeDenominatorMode(body.denominatorMode);
-    const rows = validateRows(body.rows);
+    const symbolColumnCount = normalizeSymbolColumnCount(body.symbolColumnCount);
+    const rows = validateRows(body.rows, symbolColumnCount);
     const rowsToRender = rows.map((row) => ({
       text: normalizeText(row.text),
       symbols: row.symbols,
@@ -155,7 +157,7 @@ export async function POST(request: Request) {
   }
 }
 
-function validateRows(value: unknown): RequestRow[] {
+function validateRows(value: unknown, symbolColumnCount: 2 | 3 | 4): RequestRow[] {
   if (!Array.isArray(value)) {
     throw new Error("Invalid request payload.");
   }
@@ -168,13 +170,13 @@ function validateRows(value: unknown): RequestRow[] {
       row === null ||
       typeof (row as { text?: unknown }).text !== "string" ||
       !Array.isArray((row as { symbols?: unknown }).symbols) ||
-      (row as { symbols: unknown[] }).symbols.length !== 3 ||
+      (row as { symbols: unknown[] }).symbols.length !== symbolColumnCount ||
       (typeof fontSizeValue !== "undefined" && typeof fontSizeValue !== "number") ||
       typeof (row as { numerator?: unknown }).numerator !== "number" ||
       typeof (row as { denominator?: unknown }).denominator !== "number"
     ) {
       throw new Error(
-        "Each row must include text, three symbols, numerator, denominator, and an optional font size.",
+        `Each row must include text, ${symbolColumnCount} symbols, numerator, denominator, and an optional font size.`,
       );
     }
 
@@ -196,6 +198,14 @@ function validateRows(value: unknown): RequestRow[] {
   });
 }
 
+function normalizeSymbolColumnCount(value: unknown): 2 | 3 | 4 {
+  if (value === 2 || value === 3 || value === 4) {
+    return value;
+  }
+
+  return 3;
+}
+
 function normalizeFontSize(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return TEXT_SIZE;
@@ -204,8 +214,12 @@ function normalizeFontSize(value: number | undefined) {
   return Math.max(1, Math.trunc(value));
 }
 
-function normalizeDenominatorMode(value: unknown): 7 | 10 {
-  return value === 10 ? 10 : 7;
+function normalizeDenominatorMode(value: unknown): 5 | 7 | 10 {
+  if (value === 5 || value === 7 || value === 10) {
+    return value;
+  }
+
+  return 7;
 }
 
 function normalizeText(value: string) {
@@ -217,7 +231,7 @@ function normalizeText(value: string) {
     .join("\n");
 }
 
-async function renderAllModeOutputs(title: string, rows: RequestRow[], denominatorMode: 7 | 10) {
+async function renderAllModeOutputs(title: string, rows: RequestRow[], denominatorMode: 5 | 7 | 10) {
   const [titleBanner, textPanels, ooPanels] = await Promise.all([
     renderTitleBannerPng(title),
     renderCumulativePanelPngs(rows),

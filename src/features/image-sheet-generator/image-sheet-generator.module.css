@@ -1,15 +1,16 @@
 .page {
   min-height: 100vh;
-  padding: 28px 20px 64px;
+  padding: 20px 16px 56px;
   color: var(--foreground);
 }
 
 .shell {
-  max-width: 1240px;
+  width: 100%;
   margin: 0 auto;
 }
 
 .hero {
+  width: 100%;
   position: relative;
   overflow: hidden;
   margin-bottom: 20px;
@@ -127,6 +128,7 @@
 }
 
 .panel {
+  width: 100%;
   padding: 20px;
   border: 1px solid rgba(120, 84, 39, 0.14);
   border-radius: 28px;
@@ -137,15 +139,35 @@
 
 .topBar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  align-items: end;
+  gap: 16px;
   margin-bottom: 18px;
 }
 
 .titleField {
   display: grid;
   gap: 8px;
+}
+
+.controlStrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.modeField,
+.symbolColumnField,
+.denominatorField {
+  display: grid;
+  gap: 8px;
+}
+
+.selector {
+  min-height: 56px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  font-size: 1rem;
+  font-weight: 700;
 }
 
 .fieldLabel {
@@ -156,6 +178,9 @@
 }
 
 .titleField input,
+.modeField select,
+.symbolColumnField select,
+.denominatorField select,
 .numberInput,
 .select,
 .textarea {
@@ -170,6 +195,9 @@
 }
 
 .titleField input:focus,
+.modeField select:focus,
+.symbolColumnField select:focus,
+.denominatorField select:focus,
 .numberInput:focus,
 .select:focus,
 .textarea:focus {
@@ -183,6 +211,15 @@
   padding: 14px 16px;
   border-radius: 16px;
   font-size: 1rem;
+}
+
+.modeField select,
+.symbolColumnField select {
+  min-height: 56px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  font-size: 1rem;
+  font-weight: 700;
 }
 
 .supportText {
@@ -242,144 +279,6 @@
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
-}
-
-.modeSection {
-  margin-bottom: 18px;
-}
-
-.denominatorSection {
-  margin-bottom: 18px;
-  padding: 16px;
-  border: 1px solid rgba(120, 84, 39, 0.12);
-  border-radius: 22px;
-  background: linear-gradient(180deg, rgba(251, 246, 238, 0.9), rgba(245, 236, 224, 0.9));
-}
-
-.modeTitleRow {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.modeTitleRow h2 {
-  color: var(--accent-strong);
-  font-size: 1.02rem;
-  font-weight: 800;
-}
-
-.modeTitleRow p {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.denominatorTitleRow {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.denominatorTitleRow h2 {
-  color: var(--accent-strong);
-  font-size: 1.02rem;
-  font-weight: 800;
-}
-
-.denominatorTitleRow p {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.modeTabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.modeTab,
-.modeTabActive {
-  min-height: 76px;
-  padding: 14px 16px;
-  border: 1px solid rgba(96, 76, 52, 0.14);
-  border-radius: 20px;
-  background: linear-gradient(180deg, #fbf6ee, #f4eadc);
-  color: var(--accent-strong);
-  cursor: pointer;
-  text-align: left;
-}
-
-.modeTab strong,
-.modeTabActive strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 0.98rem;
-}
-
-.modeTab span,
-.modeTabActive span {
-  display: block;
-  color: var(--muted);
-  font-size: 0.83rem;
-  line-height: 1.35;
-}
-
-.modeTabActive {
-  border-color: rgba(171, 97, 32, 0.3);
-  background: linear-gradient(135deg, #be7331, #8b4319);
-  color: #fffaf5;
-  box-shadow: 0 12px 24px rgba(139, 67, 25, 0.2);
-}
-
-.modeTabActive span {
-  color: rgba(255, 246, 235, 0.88);
-}
-
-.denominatorTabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.denominatorTab,
-.denominatorTabActive {
-  min-height: 64px;
-  padding: 14px 16px;
-  border: 1px solid rgba(96, 76, 52, 0.14);
-  border-radius: 18px;
-  background: linear-gradient(180deg, #fbf6ee, #f4eadc);
-  color: var(--accent-strong);
-  cursor: pointer;
-  text-align: left;
-}
-
-.denominatorTab strong,
-.denominatorTabActive strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 1.1rem;
-}
-
-.denominatorTab span,
-.denominatorTabActive span {
-  display: block;
-  color: var(--muted);
-  font-size: 0.83rem;
-  line-height: 1.35;
-}
-
-.denominatorTabActive {
-  border-color: rgba(171, 97, 32, 0.3);
-  background: linear-gradient(135deg, #be7331, #8b4319);
-  color: #fffaf5;
-  box-shadow: 0 12px 24px rgba(139, 67, 25, 0.2);
-}
-
-.denominatorTabActive span {
-  color: rgba(255, 246, 235, 0.88);
 }
 
 .metaRow {
@@ -515,11 +414,7 @@
     grid-template-columns: 1fr;
   }
 
-  .modeTabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .denominatorTabs {
+  .controlStrip {
     grid-template-columns: 1fr;
   }
 }
@@ -537,14 +432,6 @@
   .panel {
     padding: 14px;
     border-radius: 22px;
-  }
-
-  .modeTabs {
-    grid-template-columns: 1fr;
-  }
-
-  .denominatorSection {
-    padding: 14px;
   }
 
   .actions {

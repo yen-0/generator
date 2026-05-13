@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import styles from "./image-sheet-generator.module.css";
 
 const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?"] as const;
+const SYMBOL_COLUMN_OPTIONS = [2, 3, 4] as const;
+const DENOMINATOR_OPTIONS = [5, 7, 10] as const;
 const MODE_OPTIONS = [
   {
     value: "all",
@@ -28,8 +30,9 @@ const MODE_OPTIONS = [
 ] as const;
 
 type SymbolOption = (typeof SYMBOL_OPTIONS)[number];
+type SymbolColumnCount = (typeof SYMBOL_COLUMN_OPTIONS)[number];
 type Mode = (typeof MODE_OPTIONS)[number]["value"];
-type DenominatorMode = 7 | 10;
+type DenominatorMode = (typeof DENOMINATOR_OPTIONS)[number];
 
 const SYMBOL_LABELS: Record<SymbolOption, string> = {
   "-": "なし",
@@ -42,40 +45,52 @@ const SYMBOL_LABELS: Record<SymbolOption, string> = {
 type Row = {
   id: number;
   text: string;
-  symbols: [SymbolOption, SymbolOption, SymbolOption];
+  symbols: SymbolOption[];
   numerator: number;
   denominator: number;
   fontSize: number;
 };
 
-function createDefaultRows(denominator: DenominatorMode): Row[] {
+function createSymbols(count: SymbolColumnCount): SymbolOption[] {
+  return Array.from({ length: count }, () => "-") as SymbolOption[];
+}
+
+function createDefaultRows(denominator: DenominatorMode, symbolColumnCount: SymbolColumnCount): Row[] {
   return Array.from({ length: denominator }, (_, index) => ({
     id: index + 1,
     text: "",
-    symbols: ["-", "-", "-"] as Row["symbols"],
+    symbols: createSymbols(symbolColumnCount),
     numerator: index + 1,
     denominator,
     fontSize: 400,
   }));
 }
 
-function createRow(id: number, numerator = 1, denominator: DenominatorMode = 7): Row {
+function createRow(
+  id: number,
+  numerator = 1,
+  denominator: DenominatorMode = 7,
+  symbolColumnCount: SymbolColumnCount = 3,
+): Row {
   return {
     id,
     text: "",
-    symbols: ["-", "-", "-"],
+    symbols: createSymbols(symbolColumnCount),
     numerator,
     denominator,
     fontSize: 400,
   };
 }
 
-const INITIAL_ROWS: Row[] = createDefaultRows(7);
+const INITIAL_SYMBOL_COLUMN_COUNT: SymbolColumnCount = 3;
+const INITIAL_ROWS: Row[] = createDefaultRows(7, INITIAL_SYMBOL_COLUMN_COUNT);
 
 export function ImageSheetGenerator() {
   const [mode, setMode] = useState<Mode>("all");
   const [title, setTitle] = useState("");
   const [denominatorMode, setDenominatorMode] = useState<DenominatorMode>(7);
+  const [symbolColumnCount, setSymbolColumnCount] =
+    useState<SymbolColumnCount>(INITIAL_SYMBOL_COLUMN_COUNT);
   const [rows, setRows] = useState(INITIAL_ROWS);
   const [nextId, setNextId] = useState(INITIAL_ROWS.length + 1);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -91,7 +106,7 @@ export function ImageSheetGenerator() {
     setRows((current) => current.map((row) => (row.id === id ? { ...row, text } : row)));
   }
 
-  function updateRowSymbol(id: number, symbolIndex: 0 | 1 | 2, value: SymbolOption) {
+  function updateRowSymbol(id: number, symbolIndex: number, value: SymbolOption) {
     setRows((current) =>
       current.map((row) => {
         if (row.id !== id) {
@@ -100,6 +115,20 @@ export function ImageSheetGenerator() {
 
         const symbols = [...row.symbols] as Row["symbols"];
         symbols[symbolIndex] = value;
+
+        return { ...row, symbols };
+      }),
+    );
+  }
+
+  function updateSymbolColumnCount(value: SymbolColumnCount) {
+    setSymbolColumnCount(value);
+    setRows((current) =>
+      current.map((row) => {
+        const symbols = row.symbols.slice(0, value);
+        while (symbols.length < value) {
+          symbols.push("-");
+        }
 
         return { ...row, symbols };
       }),
@@ -127,7 +156,9 @@ export function ImageSheetGenerator() {
       }));
 
       while (nextRows.length < value) {
-        nextRows.push(createRow(nextRows.length + 1, nextRows.length + 1, value));
+        nextRows.push(
+          createRow(nextRows.length + 1, nextRows.length + 1, value, symbolColumnCount),
+        );
       }
 
       return nextRows;
@@ -147,7 +178,10 @@ export function ImageSheetGenerator() {
   }
 
   function addRow() {
-    setRows((current) => [...current, createRow(nextId, current.length + 1, denominatorMode)]);
+    setRows((current) => [
+      ...current,
+      createRow(nextId, current.length + 1, denominatorMode, symbolColumnCount),
+    ]);
     setNextId((current) => current + 1);
   }
 
@@ -176,6 +210,7 @@ export function ImageSheetGenerator() {
           mode,
           title,
           denominatorMode,
+          symbolColumnCount,
           rows,
         }),
       });
@@ -206,37 +241,6 @@ export function ImageSheetGenerator() {
   return (
     <main className={styles.page}>
       <div className={styles.shell}>
-        <section className={styles.hero} aria-label="generator overview">
-          <p className={styles.eyebrow}>日本語向け PNG ジェネレーター</p>
-          <div className={styles.heroGrid}>
-            <div className={styles.heroCopy}>
-              <h1>4つのモードで、自然に見える画像セットをまとめて作れます。</h1>
-              <p className={styles.lead}>
-                文章、記号、タイトル帯、O/O の4系統を、同じ行データから一括で生成します。
-                日本語の入力に合わせて、余白や階層が見やすい配置に整えています。
-              </p>
-            </div>
-
-            <aside className={styles.summaryCard}>
-              <div className={styles.summaryTitle}>使い方</div>
-              <div className={styles.summaryList}>
-                <div className={styles.summaryItem}>
-                  <strong>1. タイトルを入れる</strong>
-                  <span>mode 3 の見出し帯に使います。</span>
-                </div>
-                <div className={styles.summaryItem}>
-                  <strong>2. 行データを整える</strong>
-                  <span>本文、3つの記号、分子、分母を行ごとに入力します。</span>
-                </div>
-                <div className={styles.summaryItem}>
-                  <strong>3. モードを選ぶ</strong>
-                  <span>単独出力か、ZIP 一括出力かを切り替えられます。</span>
-                </div>
-              </div>
-            </aside>
-          </div>
-        </section>
-
         <section className={styles.panel}>
           <div className={styles.topBar}>
             <label className={styles.titleField}>
@@ -247,9 +251,73 @@ export function ImageSheetGenerator() {
                 placeholder="例: この二人の偉人をあてる"
               />
               <span className={styles.supportText}>
-                mode 3 の見出し帯に反映されます。空欄のときは TITLE になります。
+                空欄のときは TITLE になります。
               </span>
             </label>
+
+            <div className={styles.controlStrip} aria-label="generator controls">
+              <label className={styles.modeField}>
+                <span className={styles.fieldLabel}>出力モード</span>
+                <select
+                  className={styles.selector}
+                  value={mode}
+                  onChange={(event) => setMode(event.target.value as Mode)}
+                >
+                  {MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.title}
+                    </option>
+                  ))}
+                </select>
+                <span className={styles.supportText}>
+                  {MODE_OPTIONS.find((option) => option.value === mode)?.description}
+                </span>
+              </label>
+
+              <label className={styles.symbolColumnField}>
+                <span className={styles.fieldLabel}>記号列</span>
+                <select
+                  className={styles.selector}
+                  value={symbolColumnCount}
+                  onChange={(event) =>
+                    updateSymbolColumnCount(
+                      Number.parseInt(event.target.value, 10) as SymbolColumnCount,
+                    )
+                  }
+                >
+                  {SYMBOL_COLUMN_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option} 列
+                    </option>
+                  ))}
+                </select>
+                <span className={styles.supportText}>
+                  入力欄の記号列数を 2 / 3 / 4 で切り替えます。
+                </span>
+              </label>
+
+              <label className={styles.denominatorField}>
+                <span className={styles.fieldLabel}>分母</span>
+                <select
+                  className={styles.selector}
+                  value={denominatorMode}
+                  onChange={(event) =>
+                    updateDenominatorMode(
+                      Number.parseInt(event.target.value, 10) as DenominatorMode,
+                    )
+                  }
+                >
+                  {DENOMINATOR_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <span className={styles.supportText}>
+                  行数と分母の既定値を 5 / 7 / 10 で切り替えます。
+                </span>
+              </label>
+            </div>
 
             <div className={styles.actions}>
               <button type="button" className={styles.secondaryButton} onClick={addRow}>
@@ -266,67 +334,22 @@ export function ImageSheetGenerator() {
             </div>
           </div>
 
-          <section className={styles.modeSection} aria-label="mode selector">
-            <div className={styles.modeTitleRow}>
-              <h2>出力モード</h2>
-              <p>日本語の作業順に合わせて、選びやすい4つの見せ方に整理しました。</p>
-            </div>
-            <div className={styles.modeTabs} role="tablist" aria-label="generator modes">
-              {MODE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === option.value}
-                  className={mode === option.value ? styles.modeTabActive : styles.modeTab}
-                  onClick={() => setMode(option.value)}
-                >
-                  <strong>{option.title}</strong>
-                  <span>{option.description}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className={styles.denominatorSection} aria-label="denominator selector">
-            <div className={styles.denominatorTitleRow}>
-              <h2>分母設定</h2>
-              <p>7 と 10 を切り替えると、行数と分母の既定値が変わります。</p>
-            </div>
-            <div className={styles.denominatorTabs} role="tablist" aria-label="denominator modes">
-              {([7, 10] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  role="tab"
-                  aria-selected={denominatorMode === option}
-                  className={
-                    denominatorMode === option ? styles.denominatorTabActive : styles.denominatorTab
-                  }
-                  onClick={() => updateDenominatorMode(option)}
-                >
-                  <strong>{option}</strong>
-                  <span>{option} 行を既定にします</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
           <div className={styles.metaRow}>
             <span>{rows.length} 行</span>
             <span>{filledRowCount} 行が入力済み</span>
+            <span>{symbolColumnCount} 列の記号入力</span>
             <span>mode 1 は {denominatorMode} 行を基準に合成します</span>
           </div>
 
           <div className={styles.tableWrap}>
-            <table className={styles.table}>
+            <table className={styles.table} style={{ minWidth: `${920 + symbolColumnCount * 90}px` }}>
               <thead>
                 <tr>
                   <th className={styles.indexHeader}>#</th>
                   <th>本文</th>
-                  <th>記号 1</th>
-                  <th>記号 2</th>
-                  <th>記号 3</th>
+                  {Array.from({ length: symbolColumnCount }, (_, index) => (
+                    <th key={index}>記号 {index + 1}</th>
+                  ))}
                   <th>文字サイズ</th>
                   <th>分子</th>
                   <th>分母</th>
@@ -352,11 +375,7 @@ export function ImageSheetGenerator() {
                           className={styles.select}
                           value={symbol}
                           onChange={(event) =>
-                            updateRowSymbol(
-                              row.id,
-                              symbolIndex as 0 | 1 | 2,
-                              event.target.value as SymbolOption,
-                            )
+                            updateRowSymbol(row.id, symbolIndex, event.target.value as SymbolOption)
                           }
                         >
                           {SYMBOL_OPTIONS.map((option) => (
