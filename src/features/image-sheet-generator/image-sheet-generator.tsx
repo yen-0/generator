@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import styles from "./image-sheet-generator.module.css";
 
 const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?"] as const;
-const SYMBOL_COLUMN_OPTIONS = [2, 3, 4] as const;
+const SYMBOL_COLUMN_OPTIONS = [2, 3, 4, 5, 6] as const;
 const DENOMINATOR_OPTIONS = [5, 7, 10] as const;
 const MODE_OPTIONS = [
   {
@@ -292,7 +292,7 @@ export function ImageSheetGenerator() {
                   ))}
                 </select>
                 <span className={styles.supportText}>
-                  入力欄の記号列数を 2 / 3 / 4 で切り替えます。
+                  入力欄の記号列数を 2 / 3 / 4 / 5 / 6 で切り替えます。
                 </span>
               </label>
 

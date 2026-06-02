@@ -25,6 +25,10 @@ const SYMBOL_GROUP_SPACING = 72 * RENDER_SCALE;
 const SYMBOL_TOP_GAP = 5 * RENDER_SCALE;
 const BOTTOM_PADDING = 24 * RENDER_SCALE;
 const CIRCLE_RADIUS_BONUS = 8 * RENDER_SCALE;
+const SYMBOL_LAYOUT_REFERENCE_COUNT = 4;
+const SYMBOL_LAYOUT_REFERENCE_WIDTH =
+  SYMBOL_LAYOUT_REFERENCE_COUNT * SYMBOL_WIDTH +
+  (SYMBOL_LAYOUT_REFERENCE_COUNT - 1) * SYMBOL_GROUP_SPACING;
 
 const TITLE_BANNER_HEIGHT = 132 * RENDER_SCALE;
 const TITLE_BANNER_WIDTH = 850 * RENDER_SCALE;
@@ -78,6 +82,7 @@ const OO_MINCHO_FONT_PATH = path.join(
 
 type SymbolOption = "-" | "circle" | "cross" | "triangle" | "?";
 type Mode = "all" | "text" | "title" | "oo";
+type SymbolColumnCount = 2 | 3 | 4 | 5 | 6;
 
 type RequestRow = {
   text: string;
@@ -157,7 +162,7 @@ export async function POST(request: Request) {
   }
 }
 
-function validateRows(value: unknown, symbolColumnCount: 2 | 3 | 4): RequestRow[] {
+function validateRows(value: unknown, symbolColumnCount: SymbolColumnCount): RequestRow[] {
   if (!Array.isArray(value)) {
     throw new Error("Invalid request payload.");
   }
@@ -198,8 +203,8 @@ function validateRows(value: unknown, symbolColumnCount: 2 | 3 | 4): RequestRow[
   });
 }
 
-function normalizeSymbolColumnCount(value: unknown): 2 | 3 | 4 {
-  if (value === 2 || value === 3 || value === 4) {
+function normalizeSymbolColumnCount(value: unknown): SymbolColumnCount {
+  if (value === 2 || value === 3 || value === 4 || value === 5 || value === 6) {
     return value;
   }
 
@@ -557,38 +562,35 @@ function centerPathInBox(bounds: { x1: number; y1: number; x2: number; y2: numbe
 async function renderSymbols(
   symbols: Array<Exclude<SymbolOption, "-">>,
   textHeight: number,
-  offsetX = 0,
-  offsetY = 0,
 ) {
   if (symbols.length === 0) {
     return "";
   }
 
-  const totalWidth =
-    symbols.length * SYMBOL_WIDTH + (symbols.length - 1) * SYMBOL_GROUP_SPACING;
+  const layout = getSymbolLayout(symbols.length);
+  const totalWidth = layout.totalWidth;
   const startX = (CANVAS_WIDTH - totalWidth) / 2;
   const topY = textHeight + SYMBOL_TOP_GAP;
-
-  return Promise.all(
+  const symbolMarkup = await Promise.all(
     symbols.map(async (symbol, index) => {
-      const left = startX + index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING);
+      const left = index * (SYMBOL_WIDTH + SYMBOL_GROUP_SPACING);
       switch (symbol) {
         case "circle":
-          return `<circle cx="${offsetX + left + SYMBOL_WIDTH / 2}" cy="${offsetY + topY + SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2 + CIRCLE_RADIUS_BONUS}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
+          return `<circle cx="${left + SYMBOL_WIDTH / 2}" cy="${SYMBOL_WIDTH / 2}" r="${SYMBOL_WIDTH / 2 - SYMBOL_STROKE / 2 + CIRCLE_RADIUS_BONUS}" fill="none" stroke="${BLUE}" stroke-width="${SYMBOL_STROKE}" />`;
         case "cross":
           return [
-            `<line x1="${offsetX + left + 18 * RENDER_SCALE}" y1="${offsetY + topY + 18 * RENDER_SCALE}" x2="${offsetX + left + SYMBOL_WIDTH - 18 * RENDER_SCALE}" y2="${offsetY + topY + SYMBOL_WIDTH - 18 * RENDER_SCALE}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12 * RENDER_SCALE}" stroke-linecap="square" />`,
-            `<line x1="${offsetX + left + SYMBOL_WIDTH - 18 * RENDER_SCALE}" y1="${offsetY + topY + 18 * RENDER_SCALE}" x2="${offsetX + left + 18 * RENDER_SCALE}" y2="${offsetY + topY + SYMBOL_WIDTH - 18 * RENDER_SCALE}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12 * RENDER_SCALE}" stroke-linecap="square" />`,
+            `<line x1="${left + 18 * RENDER_SCALE}" y1="${18 * RENDER_SCALE}" x2="${left + SYMBOL_WIDTH - 18 * RENDER_SCALE}" y2="${SYMBOL_WIDTH - 18 * RENDER_SCALE}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12 * RENDER_SCALE}" stroke-linecap="square" />`,
+            `<line x1="${left + SYMBOL_WIDTH - 18 * RENDER_SCALE}" y1="${18 * RENDER_SCALE}" x2="${left + 18 * RENDER_SCALE}" y2="${SYMBOL_WIDTH - 18 * RENDER_SCALE}" stroke="${RED}" stroke-width="${SYMBOL_STROKE + 12 * RENDER_SCALE}" stroke-linecap="square" />`,
           ].join("");
         case "triangle":
-          return `<polygon points="${offsetX + left + SYMBOL_WIDTH / 2},${offsetY + topY + 8 * RENDER_SCALE} ${offsetX + left + SYMBOL_WIDTH - 10 * RENDER_SCALE},${offsetY + topY + SYMBOL_WIDTH - 12 * RENDER_SCALE} ${offsetX + left + 10 * RENDER_SCALE},${offsetY + topY + SYMBOL_WIDTH - 12 * RENDER_SCALE}" fill="none" stroke="${ORANGE}" stroke-width="${SYMBOL_STROKE}" stroke-linejoin="miter" />`;
+          return `<polygon points="${left + SYMBOL_WIDTH / 2},${8 * RENDER_SCALE} ${left + SYMBOL_WIDTH - 10 * RENDER_SCALE},${SYMBOL_WIDTH - 12 * RENDER_SCALE} ${left + 10 * RENDER_SCALE},${SYMBOL_WIDTH - 12 * RENDER_SCALE}" fill="none" stroke="${ORANGE}" stroke-width="${SYMBOL_STROKE}" stroke-linejoin="miter" />`;
         case "?": {
           const questionFont = await getQuestionFont();
           const questionFontSize = Math.round(fitSymbolFontSize("?", questionFont) * QUESTION_FONT_SCALE);
           const questionPath = questionFont.getPath("?", 0, 0, questionFontSize);
           const questionBounds = questionPath.getBoundingBox();
-          const targetCenterX = offsetX + left + SYMBOL_WIDTH / 2;
-          const targetCenterY = offsetY + topY + SYMBOL_WIDTH / 2;
+          const targetCenterX = left + SYMBOL_WIDTH / 2;
+          const targetCenterY = SYMBOL_WIDTH / 2;
           const scaleX = 2;
           const dx = targetCenterX - (scaleX * (questionBounds.x1 + questionBounds.x2)) / 2;
           const dy = targetCenterY - (questionBounds.y1 + questionBounds.y2) / 2;
@@ -598,7 +600,27 @@ async function renderSymbols(
           return "";
       }
     }),
-  ).then((parts) => parts.join(""));
+  );
+
+  return `<g transform="translate(${startX}, ${topY}) scale(${layout.scale})">${symbolMarkup.join("")}</g>`;
+}
+
+function getSymbolLayout(symbolCount: number) {
+  const rawWidth = symbolCount * SYMBOL_WIDTH + (symbolCount - 1) * SYMBOL_GROUP_SPACING;
+
+  if (symbolCount <= SYMBOL_LAYOUT_REFERENCE_COUNT) {
+    return {
+      scale: 1,
+      totalWidth: rawWidth,
+    };
+  }
+
+  const scale = SYMBOL_LAYOUT_REFERENCE_WIDTH / rawWidth;
+
+  return {
+    scale,
+    totalWidth: rawWidth * scale,
+  };
 }
 
 function fitSymbolFontSize(glyph: string, font: Font) {
