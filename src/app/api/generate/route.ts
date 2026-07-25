@@ -82,7 +82,7 @@ const OO_MINCHO_FONT_PATH = path.join(
 
 type SymbolOption = "-" | "circle" | "cross" | "triangle" | "?";
 type Mode = "all" | "text" | "title" | "oo";
-type SymbolColumnCount = 2 | 3 | 4 | 5 | 6;
+type SymbolColumnCount = 2 | 3 | 4 | 5 | 6 | 7;
 
 type RequestRow = {
   text: string;
@@ -204,7 +204,7 @@ function validateRows(value: unknown, symbolColumnCount: SymbolColumnCount): Req
 }
 
 function normalizeSymbolColumnCount(value: unknown): SymbolColumnCount {
-  if (value === 2 || value === 3 || value === 4 || value === 5 || value === 6) {
+  if (value === 2 || value === 3 || value === 4 || value === 5 || value === 6 || value === 7) {
     return value;
   }
 
@@ -501,6 +501,7 @@ async function renderOoPanelPng(numerator: number, denominator: number) {
   const font = await getOoMinchoFont();
   const numeratorText = String(numerator);
   const denominatorText = String(denominator);
+  const numeratorColor = numerator > denominator ? RED : TEXT_COLOR;
   const twoDigitScale = numeratorText.length > 1 || denominatorText.length > 1 ? 0.75 : 1;
   const fontSize = Math.round(OO_DIGIT_FONT_SIZE * twoDigitScale);
   const slashFontSize = Math.round(OO_SLASH_FONT_SIZE * twoDigitScale);
@@ -526,7 +527,7 @@ async function renderOoPanelPng(numerator: number, denominator: number) {
   const svg = `
       <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
       <rect x="${OO_BOX_BORDER}" y="${OO_BOX_BORDER}" width="${boxWidth}" height="${OO_BOX_HEIGHT}" fill="#ffffff" stroke="#000000" stroke-width="${OO_BOX_BORDER}" />
-      <path d="${numeratorPath.toPathData(3)}" fill="#000000" transform="translate(${numeratorTransform.x}, ${numeratorTransform.y})" />
+      <path d="${numeratorPath.toPathData(3)}" fill="${numeratorColor}" transform="translate(${numeratorTransform.x}, ${numeratorTransform.y})" />
       <path d="${slashPath.toPathData(3)}" fill="#000000" transform="translate(${slashTransform.x}, ${slashTransform.y})" />
       <path d="${denominatorPath.toPathData(3)}" fill="#000000" transform="translate(${denominatorTransform.x}, ${denominatorTransform.y})" />
     </svg>
