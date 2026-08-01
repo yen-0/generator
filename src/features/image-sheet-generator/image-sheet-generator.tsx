@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import styles from "./image-sheet-generator.module.css";
 
 const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?"] as const;
-const SYMBOL_COLUMN_OPTIONS = [2, 3, 4, 5, 6, 7] as const;
 const DENOMINATOR_OPTIONS = [5, 7, 10] as const;
 const MODE_OPTIONS = [
   {
@@ -30,9 +29,9 @@ const MODE_OPTIONS = [
 ] as const;
 
 type SymbolOption = (typeof SYMBOL_OPTIONS)[number];
-type SymbolColumnCount = (typeof SYMBOL_COLUMN_OPTIONS)[number];
 type Mode = (typeof MODE_OPTIONS)[number]["value"];
 type DenominatorMode = (typeof DENOMINATOR_OPTIONS)[number];
+type SymbolColumnCount = number;
 
 const SYMBOL_LABELS: Record<SymbolOption, string> = {
   "-": "なし",
@@ -52,7 +51,7 @@ type Row = {
 };
 
 function createSymbols(count: SymbolColumnCount): SymbolOption[] {
-  return Array.from({ length: count }, () => "-") as SymbolOption[];
+  return Array.from({ length: count }, () => "-");
 }
 
 function createDefaultRows(denominator: DenominatorMode, symbolColumnCount: SymbolColumnCount): Row[] {
@@ -82,7 +81,7 @@ function createRow(
   };
 }
 
-const INITIAL_SYMBOL_COLUMN_COUNT: SymbolColumnCount = 3;
+const INITIAL_SYMBOL_COLUMN_COUNT = 3;
 const INITIAL_ROWS: Row[] = createDefaultRows(7, INITIAL_SYMBOL_COLUMN_COUNT);
 
 export function ImageSheetGenerator() {
@@ -122,11 +121,12 @@ export function ImageSheetGenerator() {
   }
 
   function updateSymbolColumnCount(value: SymbolColumnCount) {
-    setSymbolColumnCount(value);
+    const nextValue = normalizeSymbolColumnCount(value);
+    setSymbolColumnCount(nextValue);
     setRows((current) =>
       current.map((row) => {
-        const symbols = row.symbols.slice(0, value);
-        while (symbols.length < value) {
+        const symbols = row.symbols.slice(0, nextValue);
+        while (symbols.length < nextValue) {
           symbols.push("-");
         }
 
@@ -276,23 +276,17 @@ export function ImageSheetGenerator() {
 
               <label className={styles.symbolColumnField}>
                 <span className={styles.fieldLabel}>記号列</span>
-                <select
-                  className={styles.selector}
+                <input
+                  className={styles.numberInput}
+                  type="number"
+                  min={1}
                   value={symbolColumnCount}
                   onChange={(event) =>
-                    updateSymbolColumnCount(
-                      Number.parseInt(event.target.value, 10) as SymbolColumnCount,
-                    )
+                    updateSymbolColumnCount(Number.parseInt(event.target.value, 10))
                   }
-                >
-                  {SYMBOL_COLUMN_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option} 列
-                    </option>
-                  ))}
-                </select>
+                />
                 <span className={styles.supportText}>
-                  入力欄の記号列数を 2 / 3 / 4 / 5 / 6 / 7 で切り替えます。
+                  記号列数を自由に指定できます。2 から 7 列の見た目はこれまでどおりです。
                 </span>
               </label>
 
@@ -440,6 +434,14 @@ export function ImageSheetGenerator() {
       </div>
     </main>
   );
+}
+
+function normalizeSymbolColumnCount(value: number) {
+  if (!Number.isFinite(value)) {
+    return INITIAL_SYMBOL_COLUMN_COUNT;
+  }
+
+  return Math.max(1, Math.trunc(value));
 }
 
 function getZipName(title: string, mode: Mode) {

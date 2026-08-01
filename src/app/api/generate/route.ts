@@ -82,7 +82,7 @@ const OO_MINCHO_FONT_PATH = path.join(
 
 type SymbolOption = "-" | "circle" | "cross" | "triangle" | "?";
 type Mode = "all" | "text" | "title" | "oo";
-type SymbolColumnCount = 2 | 3 | 4 | 5 | 6 | 7;
+type SymbolColumnCount = number;
 
 type RequestRow = {
   text: string;
@@ -204,8 +204,8 @@ function validateRows(value: unknown, symbolColumnCount: SymbolColumnCount): Req
 }
 
 function normalizeSymbolColumnCount(value: unknown): SymbolColumnCount {
-  if (value === 2 || value === 3 || value === 4 || value === 5 || value === 6 || value === 7) {
-    return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(1, Math.trunc(value));
   }
 
   return 3;
