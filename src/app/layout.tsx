@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "画像シート生成",
-  description: "日本語入力に合わせた4モードのPNG生成ツールです。",
+  title: "複数アキネーター生成器",
+  description: "日本語教材向けの画像シートをまとめて生成できるワークスペースです。",
 };
 
 export default function RootLayout({
