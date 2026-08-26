@@ -932,7 +932,7 @@ export function ImageSheetGenerator() {
             >
               <Image src="/radicaltakurou.jpg" alt="radicalNaTakurou" width={26} height={26} unoptimized />
             </a>
-            <span className={styles.wordmark}>記号アニメーター生成</span>
+            <span className={styles.wordmark}>複数アキネーター生成</span>
             <div className={styles.divider} />
             <div className={styles.titleField}>
               <input
