@@ -32,6 +32,10 @@ import {
   type SymbolOption,
 } from "./generator-shared";
 import {
+  renderClientPreviewBlob,
+  renderClientZipBlob,
+} from "./generator-client-render";
+import {
   buildFrameSymbolSequence,
   buildMp4FileName,
   canvasToBlob,
@@ -259,33 +263,12 @@ export function ImageSheetGenerator() {
   const deferredPreviewPayload = useDeferredValue(previewPayload);
 
   useEffect(() => {
-    const controller = new AbortController();
     const timeoutId = window.setTimeout(async () => {
       setIsPreviewLoading(true);
       setPreviewError(null);
 
       try {
-        const response = await fetch("/api/preview", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            ...deferredPreviewPayload,
-            previewIndex: safePreviewIndex,
-          }),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(payload?.error ?? "Preview generation failed.");
-        }
-
-        const blob = await response.blob();
-        if (controller.signal.aborted) {
-          return;
-        }
+        const blob = await renderClientPreviewBlob(deferredPreviewPayload, safePreviewIndex);
 
         const objectUrl = URL.createObjectURL(blob);
         setPreviewUrl((current) => {
@@ -295,20 +278,13 @@ export function ImageSheetGenerator() {
           return objectUrl;
         });
       } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-
         setPreviewError(error instanceof Error ? error.message : "Preview generation failed.");
       } finally {
-        if (!controller.signal.aborted) {
-          setIsPreviewLoading(false);
-        }
+        setIsPreviewLoading(false);
       }
     }, PREVIEW_DEBOUNCE_MS);
 
     return () => {
-      controller.abort();
       window.clearTimeout(timeoutId);
     };
   }, [deferredPreviewPayload, safePreviewIndex]);
@@ -650,50 +626,25 @@ export function ImageSheetGenerator() {
     let renderingTimer: number | null = null;
 
     try {
-      const responsePromise = fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(previewPayload),
-      });
-
       setProgressPhase("rendering");
       renderingTimer = window.setInterval(() => {
         setProgressValue((current) => (current >= 72 ? current : current + 4));
       }, 180);
 
-      const response = await responsePromise;
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? "Image generation failed.");
-      }
+      const generation = await renderClientZipBlob(previewPayload);
 
       if (renderingTimer) {
         window.clearInterval(renderingTimer);
         renderingTimer = null;
       }
 
-      const totalBytesHeader = response.headers.get("Content-Length");
-      const totalBytes = totalBytesHeader ? Number.parseInt(totalBytesHeader, 10) : NaN;
-      const zipName = getZipName(title, "all");
-      const bytes = await readResponseBytes(response, totalBytes, (received, total) => {
-        setProgressPhase("downloading");
-        if (total > 0) {
-          const ratio = received / total;
-          setProgressValue(Math.min(99, Math.round(75 + ratio * 25)));
-        } else {
-          setProgressValue((current) => (current >= 95 ? current : current + 1));
-        }
-      });
-
-      const blob = new Blob([bytes], { type: "application/zip" });
-      downloadBlob(blob, zipName);
+      setProgressPhase("downloading");
+      setProgressValue(98);
+      downloadBlob(generation.blob, generation.fileName);
 
       setProgressPhase("complete");
       setProgressValue(100);
-      setStatusMessage(`${zipName} をダウンロードしました。`);
+      setStatusMessage(`${generation.fileName} をダウンロードしました。`);
     } catch (error) {
       if (renderingTimer) {
         window.clearInterval(renderingTimer);
@@ -1532,45 +1483,4 @@ function writeAscii(view: DataView, offset: number, value: string) {
   for (let index = 0; index < value.length; index += 1) {
     view.setUint8(offset + index, value.charCodeAt(index));
   }
-}
-
-async function readResponseBytes(
-  response: Response,
-  totalBytes: number,
-  onProgress: (received: number, total: number) => void,
-) {
-  if (!response.body) {
-    const blob = await response.blob();
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    onProgress(bytes.byteLength, bytes.byteLength);
-    return bytes;
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    if (!value) {
-      continue;
-    }
-
-    chunks.push(value);
-    received += value.byteLength;
-    onProgress(received, Number.isFinite(totalBytes) ? totalBytes : 0);
-  }
-
-  const combined = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return combined;
 }
