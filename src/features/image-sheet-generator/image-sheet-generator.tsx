@@ -8,13 +8,18 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
+import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import Image from "next/image";
+import JSZip from "jszip";
 
 import {
+  clampPreviewIndex,
   createDefaultRows,
   createRow,
-  clampPreviewIndex,
   getPreviewCount,
   getZipName,
   INITIAL_SYMBOL_COLUMN_COUNT,
@@ -26,10 +31,38 @@ import {
   type GeneratorRow,
   type SymbolOption,
 } from "./generator-shared";
+import {
+  buildFrameSymbolSequence,
+  buildMp4FileName,
+  canvasToBlob,
+  clampPhotoCount,
+  computePhotoSlotLayouts,
+  createAnchorArray,
+  createPhotoSlots,
+  drawPhotoPreview,
+  fileToDataUrl,
+  frameCountForDuration,
+  getAutomaticAnchors,
+  getVisibleAnimatedSymbols,
+  loadPreviewAssets,
+  normalizeAnchors,
+  normalizePhotoSlots,
+  PHOTO_CANVAS_ASPECT_RATIO,
+  PHOTO_CANVAS_HEIGHT,
+  PHOTO_CANVAS_WIDTH,
+  PHOTO_COUNT_MAX,
+  PHOTO_COUNT_MIN,
+  PHOTO_EXPORT_FPS,
+  PHOTO_SYMBOL_MARGIN_SECONDS,
+  type PhotoRenderAssets,
+  type PhotoSlotData,
+  type Point,
+} from "./photo-panel";
 import styles from "./image-sheet-generator.module.css";
 
 type ProgressPhase = "idle" | "preparing" | "rendering" | "downloading" | "complete" | "error";
 type PreviewTab = "preview" | "photo";
+type SupportedAnimatedSymbol = Extract<SymbolOption, "circle" | "cross" | "triangle">;
 
 const INITIAL_ROWS = createDefaultRows(7, INITIAL_SYMBOL_COLUMN_COUNT);
 const PREVIEW_DEBOUNCE_MS = 220;
@@ -46,14 +79,20 @@ const SYMBOL_COLORS: Record<SymbolOption, string> = {
   "?": "#9e00fe",
 };
 
-const JAPANESE_INSTRUCTIONS = [
-  "タイトルは未入力でも生成できます。空欄の場合は TITLE としてプレビューされます。",
-  "問題パネルは行ごとに積み上がるので、上の行ほど早い段階で表示されます。",
-  "記号は なし / ◯ / ✕ / △ / ? から選べます。列数を増やすと各行の記号欄も増えます。",
-  "分子は行ごとに編集できます。分母は上部の設定に合わせて全行で固定されます。",
-  "文字サイズは各行ごとに調整できます。大きすぎる場合はプレビューで見切れを確認してください。",
-  "ZIP生成中は進行バーが表示されます。後半は実際のダウンロード量に合わせて進みます。",
+const HELP_TEXT = [
+  "プレビュータブでは従来どおり画像プレビューとPNG ZIPを書き出します。",
+  "写真タブでは 9:16 の透明キャンバス下部 1/3 に写真枠を配置します。",
+  "図の数と記号数が同じ場合、アンカーは写真枠の中央に自動配置されます。",
+  "図の数と記号数が違う場合は「アンカーを設定」を押して、プレビュー上を順番にクリックしてください。",
+  "メモ欄の内容はアンカー下のラベルとして左から順に表示されます。",
+  "MP4生成では 0_preview.png と各行の MP4 をまとめた ZIP をブラウザ内で作成します。",
 ];
+
+const SOUND_PATHS: Record<SupportedAnimatedSymbol, string> = {
+  circle: "/nakamura_maru.m4a",
+  cross: "/nakamura_batsu.m4a",
+  triangle: "/nakamura_sankaku.m4a",
+};
 
 export function ImageSheetGenerator() {
   const [title, setTitle] = useState("");
@@ -75,17 +114,137 @@ export function ImageSheetGenerator() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [activePreviewTab, setActivePreviewTab] = useState<PreviewTab>("preview");
+  const [photoCount, setPhotoCount] = useState(INITIAL_SYMBOL_COLUMN_COUNT);
+  const [photoSlots, setPhotoSlots] = useState<PhotoSlotData[]>(
+    () => createPhotoSlots(INITIAL_SYMBOL_COLUMN_COUNT),
+  );
+  const [photoAnchors, setPhotoAnchors] = useState<Array<Point | null>>(
+    () => getAutomaticAnchors(INITIAL_SYMBOL_COLUMN_COUNT, INITIAL_SYMBOL_COLUMN_COUNT),
+  );
+  const [activePhotoSlotIndex, setActivePhotoSlotIndex] = useState<number | null>(0);
+  const [isAnchorPlacementMode, setIsAnchorPlacementMode] = useState(false);
+  const [anchorPlacementIndex, setAnchorPlacementIndex] = useState(0);
+  const [photoAssets, setPhotoAssets] = useState<PhotoRenderAssets | null>(null);
+
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  const photoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingPhotoSlotIndexRef = useRef<number | null>(null);
+  const ffmpegRef = useRef<FFmpeg | null>(null);
+  const ffmpegLoadPromiseRef = useRef<Promise<FFmpeg> | null>(null);
+  const audioBufferCacheRef = useRef<Map<SupportedAnimatedSymbol, AudioBuffer> | null>(null);
 
   const previewCount = getPreviewCount(rows.length);
   const safePreviewIndex = clampPreviewIndex(previewIndex, rows.length);
+  const photoNeedsManualAnchors = photoCount !== symbolColumnCount;
+  const currentAnchorStepLabel =
+    isAnchorPlacementMode && anchorPlacementIndex < symbolColumnCount
+      ? `アンカー ${anchorPlacementIndex + 1} / ${symbolColumnCount}`
+      : null;
 
   useEffect(() => {
     if (safePreviewIndex !== previewIndex) {
       setPreviewIndex(safePreviewIndex);
     }
   }, [previewIndex, rows.length, safePreviewIndex]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadPreviewAssets(photoSlots)
+      .then((assets) => {
+        if (!cancelled) {
+          setPhotoAssets(assets);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : "写真アセットの読み込みに失敗しました。");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [photoSlots]);
+
+  useEffect(() => {
+    setPhotoSlots((current) => normalizePhotoSlots(current, photoCount));
+    setActivePhotoSlotIndex((current) => {
+      if (photoCount <= 0) {
+        return null;
+      }
+      if (current === null) {
+        return 0;
+      }
+      return Math.min(current, photoCount - 1);
+    });
+  }, [photoCount]);
+
+  useEffect(() => {
+    if (photoCount === symbolColumnCount) {
+      setPhotoAnchors(getAutomaticAnchors(photoCount, symbolColumnCount));
+      setIsAnchorPlacementMode(false);
+      setAnchorPlacementIndex(symbolColumnCount);
+      return;
+    }
+
+    setPhotoAnchors((current) => normalizeAnchors(current, symbolColumnCount));
+    setAnchorPlacementIndex((current) => Math.min(current, Math.max(0, symbolColumnCount - 1)));
+  }, [photoCount, symbolColumnCount]);
+
+  const redrawPhotoCanvas = useEffectEvent(() => {
+    if (!photoAssets) {
+      return;
+    }
+
+    const canvas = photoCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    drawPhotoPreview(context, photoAssets, {
+      photoCount,
+      photoSlots,
+      symbolColumnCount,
+      symbolColumnNotes,
+      anchors: photoAnchors,
+      renderAnchorNumbers: isAnchorPlacementMode,
+      activeSlotIndex: activePhotoSlotIndex,
+    });
+  });
+
+  useEffect(() => {
+    if (activePreviewTab !== "photo") {
+      return;
+    }
+
+    redrawPhotoCanvas();
+  }, [
+    activePreviewTab,
+    activePhotoSlotIndex,
+    isAnchorPlacementMode,
+    photoAnchors,
+    photoAssets,
+    photoCount,
+    photoSlots,
+    symbolColumnCount,
+    symbolColumnNotes,
+  ]);
+
+  useEffect(() => {
+    if (activePreviewTab !== "photo") {
+      return;
+    }
+
+    redrawPhotoCanvas();
+  }, [activePreviewTab]);
 
   const previewPayload = useMemo<GeneratorPayload>(
     () => ({
@@ -182,12 +341,12 @@ export function ImageSheetGenerator() {
   }, [isHelpOpen]);
 
   const handlePreviewKeydown = useEffectEvent((event: KeyboardEvent) => {
-    if (event.key === "ArrowLeft") {
+    if (event.key === "ArrowLeft" && activePreviewTab === "preview") {
       event.preventDefault();
       goToPreviousPreview();
     }
 
-    if (event.key === "ArrowRight") {
+    if (event.key === "ArrowRight" && activePreviewTab === "preview") {
       event.preventDefault();
       goToNextPreview();
     }
@@ -202,6 +361,39 @@ export function ImageSheetGenerator() {
     node.addEventListener("keydown", handlePreviewKeydown);
     return () => {
       node.removeEventListener("keydown", handlePreviewKeydown);
+    };
+  }, []);
+
+  const handleWindowPaste = useEffectEvent(async (event: ClipboardEvent) => {
+    const items = Array.from(event.clipboardData?.items ?? []);
+    const item = items.find((entry) => entry.type.startsWith("image/"));
+    if (!item) {
+      return;
+    }
+
+    event.preventDefault();
+    const file = item.getAsFile();
+    if (!file) {
+      return;
+    }
+
+    await setPhotoSlotFromFile(activePhotoSlotIndex ?? 0, file);
+  });
+
+  useEffect(() => {
+    if (activePreviewTab !== "photo") {
+      return;
+    }
+
+    window.addEventListener("paste", handleWindowPaste);
+    return () => {
+      window.removeEventListener("paste", handleWindowPaste);
+    };
+  }, [activePreviewTab]);
+
+  useEffect(() => {
+    return () => {
+      ffmpegRef.current?.terminate();
     };
   }, []);
 
@@ -344,6 +536,110 @@ export function ImageSheetGenerator() {
     });
   }
 
+  function updatePhotoCount(value: number) {
+    setPhotoCount(clampPhotoCount(value));
+  }
+
+  async function setPhotoSlotFromFile(index: number, file: Blob) {
+    const dataUrl = await fileToDataUrl(file);
+    setPhotoSlots((current) => {
+      const next = normalizePhotoSlots(current, photoCount);
+      if (!next[index]) {
+        return next;
+      }
+
+      next[index] = {
+        ...next[index],
+        dataUrl,
+        fileName: file instanceof File ? file.name : next[index].fileName,
+      };
+      return next;
+    });
+    setActivePhotoSlotIndex(index);
+  }
+
+  function openPhotoPicker(index: number) {
+    pendingPhotoSlotIndexRef.current = index;
+    setActivePhotoSlotIndex(index);
+    photoInputRef.current?.click();
+  }
+
+  function startAnchorPlacement() {
+    setIsAnchorPlacementMode(true);
+    setAnchorPlacementIndex(0);
+    setPhotoAnchors(createAnchorArray(symbolColumnCount));
+  }
+
+  function clearSelectedPhoto() {
+    if (activePhotoSlotIndex === null) {
+      return;
+    }
+
+    setPhotoSlots((current) =>
+      current.map((slot, index) =>
+        index === activePhotoSlotIndex ? { ...slot, dataUrl: null, fileName: null } : slot,
+      ),
+    );
+  }
+
+  function handlePhotoInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const index = pendingPhotoSlotIndexRef.current ?? activePhotoSlotIndex ?? 0;
+    if (file) {
+      void setPhotoSlotFromFile(index, file);
+    }
+
+    event.target.value = "";
+  }
+
+  async function handlePhotoDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const file = Array.from(event.dataTransfer.files).find((entry) => entry.type.startsWith("image/"));
+    if (!file) {
+      return;
+    }
+
+    const point = mapCanvasPointFromClient(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    const slotIndex = getPhotoSlotIndexAtPoint(point.x, point.y);
+    if (slotIndex === null) {
+      return;
+    }
+
+    await setPhotoSlotFromFile(slotIndex, file);
+  }
+
+  function handlePhotoCanvasClick(event: ReactMouseEvent<HTMLCanvasElement>) {
+    const point = mapCanvasPointFromClient(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    if (isAnchorPlacementMode) {
+      setPhotoAnchors((current) => {
+        const next = normalizeAnchors(current, symbolColumnCount);
+        next[anchorPlacementIndex] = point;
+        return next;
+      });
+
+      if (anchorPlacementIndex >= symbolColumnCount - 1) {
+        setIsAnchorPlacementMode(false);
+        setAnchorPlacementIndex(symbolColumnCount);
+      } else {
+        setAnchorPlacementIndex((current) => current + 1);
+      }
+      return;
+    }
+
+    const slotIndex = getPhotoSlotIndexAtPoint(point.x, point.y);
+    if (slotIndex !== null) {
+      openPhotoPicker(slotIndex);
+    }
+  }
+
   async function generateImages() {
     setErrorMessage(null);
     setStatusMessage(null);
@@ -393,14 +689,7 @@ export function ImageSheetGenerator() {
       });
 
       const blob = new Blob([bytes], { type: "application/zip" });
-      const objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = zipName;
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(objectUrl);
+      downloadBlob(blob, zipName);
 
       setProgressPhase("complete");
       setProgressValue(100);
@@ -417,11 +706,267 @@ export function ImageSheetGenerator() {
     }
   }
 
+  async function generatePhotoVideos() {
+    if (!photoAssets) {
+      setErrorMessage("写真アセットの読み込みが終わっていません。");
+      return;
+    }
+
+    if (photoNeedsManualAnchors && photoAnchors.some((anchor) => anchor === null)) {
+      setErrorMessage("アンカーをすべて設定してください。");
+      return;
+    }
+
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setIsGenerating(true);
+    setProgressPhase("preparing");
+    setProgressValue(6);
+
+    try {
+      const ffmpeg = await ensureFfmpegLoaded();
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = PHOTO_CANVAS_WIDTH;
+      exportCanvas.height = PHOTO_CANVAS_HEIGHT;
+      const exportContext = exportCanvas.getContext("2d");
+      if (!exportContext) {
+        throw new Error("Canvas context is unavailable.");
+      }
+
+      const zip = new JSZip();
+
+      drawPhotoPreview(exportContext, photoAssets, {
+        photoCount,
+        photoSlots,
+        symbolColumnCount,
+        symbolColumnNotes,
+        anchors: photoAnchors,
+        showAnchors: false,
+      });
+      const previewBlob = await canvasToBlob(exportCanvas, "image/png");
+      zip.file("0_preview.png", previewBlob);
+
+      setProgressPhase("rendering");
+      setProgressValue(18);
+
+      for (const [rowIndex, row] of rows.entries()) {
+        const rowNumber = rowIndex + 1;
+        const baseSymbolSequence = buildFrameSymbolSequence(row.symbols, symbolColumnCount);
+        const supportedSymbols = getVisibleAnimatedSymbols(baseSymbolSequence);
+        const timeline = await buildAudioTimeline(supportedSymbols);
+        const frameCount = frameCountForDuration(timeline.totalDurationSeconds);
+        const audioBlob = audioBufferToWavBlob(timeline.audioBuffer);
+        const dir = `/job-${Date.now()}-${rowNumber}`;
+
+        await ensureDirectory(ffmpeg, dir);
+
+        for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+          const elapsedSeconds = frameIndex / PHOTO_EXPORT_FPS;
+          const visibleCount = timeline.symbolStarts.filter(
+            (symbolStart) => symbolStart <= elapsedSeconds,
+          ).length;
+          const partialSymbols = limitAnimatedSymbols(baseSymbolSequence, visibleCount);
+          drawPhotoPreview(exportContext, photoAssets, {
+            photoCount,
+            photoSlots,
+            symbolColumnCount,
+            symbolColumnNotes,
+            anchors: photoAnchors,
+            symbolsToShow: partialSymbols,
+            showAnchors: false,
+          });
+          const frameBlob = await canvasToBlob(exportCanvas, "image/png");
+          const bytes = new Uint8Array(await frameBlob.arrayBuffer());
+          await ffmpeg.writeFile(`${dir}/frame-${String(frameIndex).padStart(4, "0")}.png`, bytes);
+        }
+
+        await ffmpeg.writeFile(`${dir}/audio.wav`, new Uint8Array(await audioBlob.arrayBuffer()));
+
+        const outputFile = `${dir}/output.mp4`;
+        const exitCode = await ffmpeg.exec([
+          "-framerate",
+          String(PHOTO_EXPORT_FPS),
+          "-i",
+          `${dir}/frame-%04d.png`,
+          "-i",
+          `${dir}/audio.wav`,
+          "-c:v",
+          "libx264",
+          "-pix_fmt",
+          "yuv420p",
+          "-c:a",
+          "aac",
+          "-shortest",
+          outputFile,
+        ]);
+
+        if (exitCode !== 0) {
+          throw new Error(`MP4 generation failed for row ${rowNumber}.`);
+        }
+
+        const mp4Bytes = await ffmpeg.readFile(outputFile);
+        zip.file(buildMp4FileName(rowNumber, row.text), new Uint8Array(mp4Bytes as Uint8Array));
+        await cleanupDirectory(ffmpeg, dir);
+
+        setProgressValue(Math.min(92, Math.round(18 + ((rowIndex + 1) / rows.length) * 70)));
+      }
+
+      setProgressPhase("downloading");
+      setProgressValue(96);
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const zipName = getZipName(title, "all");
+      downloadBlob(zipBlob, zipName);
+      setProgressPhase("complete");
+      setProgressValue(100);
+      setStatusMessage(`${zipName} をダウンロードしました。`);
+    } catch (error) {
+      setProgressPhase("error");
+      setProgressValue(100);
+      setErrorMessage(error instanceof Error ? error.message : "MP4 generation failed.");
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  async function handleGenerate() {
+    if (activePreviewTab === "photo") {
+      await generatePhotoVideos();
+      return;
+    }
+
+    await generateImages();
+  }
+
+  async function ensureFfmpegLoaded() {
+    if (ffmpegRef.current?.loaded) {
+      return ffmpegRef.current;
+    }
+
+    if (ffmpegLoadPromiseRef.current) {
+      return ffmpegLoadPromiseRef.current;
+    }
+
+    ffmpegLoadPromiseRef.current = (async () => {
+      const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+      const instance = new FFmpeg();
+      await instance.load({
+        coreURL: "/ffmpeg/ffmpeg-core.js",
+        wasmURL: "/ffmpeg/ffmpeg-core.wasm",
+      });
+      ffmpegRef.current = instance;
+      return instance;
+    })();
+
+    try {
+      return await ffmpegLoadPromiseRef.current;
+    } finally {
+      ffmpegLoadPromiseRef.current = null;
+    }
+  }
+
+  async function buildAudioTimeline(symbols: SupportedAnimatedSymbol[]) {
+    const audioBuffers = await loadSymbolAudioBuffers();
+    const symbolStarts: number[] = [];
+    let currentTime = PHOTO_SYMBOL_MARGIN_SECONDS;
+
+    for (const symbol of symbols) {
+      symbolStarts.push(currentTime);
+      const audioBuffer = audioBuffers.get(symbol);
+      currentTime += (audioBuffer?.duration ?? 0) + PHOTO_SYMBOL_MARGIN_SECONDS;
+    }
+
+    const totalDurationSeconds = Math.max(currentTime, PHOTO_SYMBOL_MARGIN_SECONDS * 2);
+    const sampleRate = 44100;
+    const offlineContext = new OfflineAudioContext(
+      2,
+      Math.ceil(totalDurationSeconds * sampleRate),
+      sampleRate,
+    );
+
+    symbols.forEach((symbol, index) => {
+      const source = offlineContext.createBufferSource();
+      source.buffer = audioBuffers.get(symbol) ?? null;
+      if (!source.buffer) {
+        return;
+      }
+
+      source.connect(offlineContext.destination);
+      source.start(symbolStarts[index] ?? PHOTO_SYMBOL_MARGIN_SECONDS);
+    });
+
+    return {
+      symbolStarts,
+      totalDurationSeconds,
+      audioBuffer: await offlineContext.startRendering(),
+    };
+  }
+
+  async function loadSymbolAudioBuffers() {
+    if (audioBufferCacheRef.current) {
+      return audioBufferCacheRef.current;
+    }
+
+    const AudioContextClass = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) {
+      throw new Error("AudioContext is unavailable in this browser.");
+    }
+
+    const context = new AudioContextClass();
+    const entries = await Promise.all(
+      (Object.keys(SOUND_PATHS) as SupportedAnimatedSymbol[]).map(async (symbol) => {
+        const response = await fetch(SOUND_PATHS[symbol]);
+        if (!response.ok) {
+          throw new Error(`Failed to load sound: ${symbol}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
+        return [symbol, audioBuffer] as const;
+      }),
+    );
+    await context.close();
+
+    const cache = new Map<SupportedAnimatedSymbol, AudioBuffer>(entries);
+    audioBufferCacheRef.current = cache;
+    return cache;
+  }
+
+  function mapCanvasPointFromClient(clientX: number, clientY: number) {
+    const canvas = photoCanvasRef.current;
+    if (!canvas) {
+      return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      return null;
+    }
+
+    return {
+      x: ((clientX - rect.left) / rect.width) * PHOTO_CANVAS_WIDTH,
+      y: ((clientY - rect.top) / rect.height) * PHOTO_CANVAS_HEIGHT,
+    };
+  }
+
+  function getPhotoSlotIndexAtPoint(x: number, y: number) {
+    const layouts = computePhotoSlotLayouts(photoCount);
+    const match = layouts.find(
+      (layout) =>
+        x >= layout.x &&
+        x <= layout.x + layout.width &&
+        y >= layout.y &&
+        y <= layout.y + layout.height,
+    );
+    return match?.index ?? null;
+  }
+
   const addRowColspan = 6 + symbolColumnCount;
   const denomStepDownDisabled = denominatorMode <= DENOMINATOR_MIN;
   const denomStepUpDisabled = denominatorMode >= DENOMINATOR_MAX;
   const symbolStepDownDisabled = symbolColumnCount <= SYMBOL_COLUMN_MIN;
   const symbolStepUpDisabled = symbolColumnCount >= SYMBOL_COLUMN_MAX;
+  const selectedPhotoName =
+    activePhotoSlotIndex !== null ? photoSlots[activePhotoSlotIndex]?.fileName ?? null : null;
 
   return (
     <main className={styles.page}>
@@ -436,7 +981,7 @@ export function ImageSheetGenerator() {
             >
               <Image src="/radicaltakurou.jpg" alt="radicalNaTakurou" width={26} height={26} unoptimized />
             </a>
-            <span className={styles.wordmark}>複数アキネーター生成器</span>
+            <span className={styles.wordmark}>記号アニメーター生成</span>
             <div className={styles.divider} />
             <div className={styles.titleField}>
               <input
@@ -444,7 +989,7 @@ export function ImageSheetGenerator() {
                 type="text"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                placeholder="例: ひらがなれんしゅう"
+                placeholder="タイトル"
               />
             </div>
             <div className={styles.spacer} />
@@ -452,8 +997,8 @@ export function ImageSheetGenerator() {
               ref={helpButtonRef}
               type="button"
               className={styles.iconButton}
-              title="日本語ガイド"
-              aria-label="日本語ガイド"
+              title="使い方"
+              aria-label="使い方"
               onClick={() => setIsHelpOpen(true)}
             >
               <svg viewBox="0 0 24 24" width="17" height="17">
@@ -465,7 +1010,7 @@ export function ImageSheetGenerator() {
             <button
               type="button"
               className={styles.primaryButton}
-              onClick={generateImages}
+              onClick={() => void handleGenerate()}
               disabled={isGenerating}
             >
               {isGenerating ? (
@@ -481,7 +1026,7 @@ export function ImageSheetGenerator() {
                     <path d="M12 4v10m0 0-4-4m4 4 4-4" />
                     <path d="M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
                   </svg>
-                  ZIPを生成
+                  {activePreviewTab === "photo" ? "MP4生成" : "ZIP生成"}
                 </>
               )}
             </button>
@@ -501,7 +1046,7 @@ export function ImageSheetGenerator() {
                     <th rowSpan={2} style={{ width: 34, textAlign: "center" }}>
                       #
                     </th>
-                    <th rowSpan={2}>問題</th>
+                    <th rowSpan={2}>問題の内容</th>
                     <th colSpan={symbolColumnCount} style={{ textAlign: "center" }}>
                       <div className={styles.headerStepper}>
                         <span>記号</span>
@@ -630,12 +1175,7 @@ export function ImageSheetGenerator() {
                         />
                       </td>
                       <td>
-                        <input
-                          className={styles.numberInput}
-                          type="number"
-                          value={row.denominator}
-                          readOnly
-                        />
+                        <input className={styles.numberInput} type="number" value={row.denominator} readOnly />
                       </td>
                       <td style={{ textAlign: "center" }}>
                         <button
@@ -683,12 +1223,7 @@ export function ImageSheetGenerator() {
 
           <div className={styles.verticalDivider} />
 
-          <div
-            ref={previewPanelRef}
-            className={styles.previewPane}
-            tabIndex={0}
-            aria-label="Preview panel"
-          >
+          <div ref={previewPanelRef} className={styles.previewPane} tabIndex={0} aria-label="Preview panel">
             <div className={styles.previewTabs}>
               <button
                 type="button"
@@ -763,9 +1298,94 @@ export function ImageSheetGenerator() {
             )}
 
             {activePreviewTab === "photo" && (
-              <div className={styles.previewFrame}>
-                <div className={styles.previewPlaceholder}>写真タブの内容は準備中です。</div>
-              </div>
+              <>
+                <div className={styles.photoToolbar}>
+                  <div className={styles.photoToolbarGroup}>
+                    <span className={styles.photoLabel}>図の数</span>
+                    <button
+                      type="button"
+                      className={styles.stepBtn}
+                      onClick={() => updatePhotoCount(photoCount - 1)}
+                      disabled={photoCount <= PHOTO_COUNT_MIN}
+                    >
+                      −
+                    </button>
+                    <span className={styles.stepValue}>{photoCount}</span>
+                    <button
+                      type="button"
+                      className={styles.stepBtn}
+                      onClick={() => updatePhotoCount(photoCount + 1)}
+                      disabled={photoCount >= PHOTO_COUNT_MAX}
+                    >
+                      ＋
+                    </button>
+                  </div>
+                  <div className={styles.photoToolbarGroup}>
+                    {photoNeedsManualAnchors && (
+                      <button type="button" className={styles.ghostButton} onClick={startAnchorPlacement}>
+                        アンカーを設定
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      onClick={() => openPhotoPicker(activePhotoSlotIndex ?? 0)}
+                    >
+                      画像を選択
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      onClick={clearSelectedPhoto}
+                      disabled={activePhotoSlotIndex === null}
+                    >
+                      クリア
+                    </button>
+                  </div>
+                </div>
+
+                <div className={styles.photoStatusRow}>
+                  <span className={styles.photoStatusText}>
+                    {photoNeedsManualAnchors
+                      ? currentAnchorStepLabel ?? "アンカーを手動で設定してください。"
+                      : "記号数と図の数が同じなのでアンカーは自動配置です。"}
+                  </span>
+                  <span className={styles.photoStatusText}>
+                    {selectedPhotoName
+                      ? `選択中: ${selectedPhotoName}`
+                      : "写真枠をクリック、ドラッグ&ドロップ、または貼り付けできます。"}
+                  </span>
+                </div>
+
+                <div
+                  className={styles.photoCanvasShell}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => void handlePhotoDrop(event)}
+                >
+                  <canvas
+                    ref={photoCanvasRef}
+                    className={styles.photoCanvas}
+                    width={PHOTO_CANVAS_WIDTH}
+                    height={PHOTO_CANVAS_HEIGHT}
+                    style={{ aspectRatio: String(PHOTO_CANVAS_ASPECT_RATIO) }}
+                    onClick={handlePhotoCanvasClick}
+                  />
+                </div>
+
+                <div className={styles.photoLegend}>
+                  <span>下 1/3 に写真枠を配置</span>
+                  <span>メモはアンカー下に表示</span>
+                  <span>対応記号: ○ / × / △</span>
+                </div>
+
+                <input
+                  ref={photoInputRef}
+                  className={styles.hiddenInput}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoInputChange}
+                />
+              </>
             )}
           </div>
         </div>
@@ -782,7 +1402,7 @@ export function ImageSheetGenerator() {
           >
             <div className={styles.modalHeader}>
               <div>
-                <p className={styles.modalEyebrow}>日本語ガイド</p>
+                <p className={styles.modalEyebrow}>How To</p>
                 <h2 id="jp-instructions-title">使い方</h2>
               </div>
               <button
@@ -797,7 +1417,7 @@ export function ImageSheetGenerator() {
               </button>
             </div>
             <ol className={styles.instructionsList}>
-              {JAPANESE_INSTRUCTIONS.map((item) => (
+              {HELP_TEXT.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ol>
@@ -806,6 +1426,112 @@ export function ImageSheetGenerator() {
       )}
     </main>
   );
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+function limitAnimatedSymbols(symbols: SymbolOption[], visibleSupportedCount: number) {
+  const next: SymbolOption[] = [];
+  let supportedSeen = 0;
+
+  for (const symbol of symbols) {
+    if (symbol === "circle" || symbol === "cross" || symbol === "triangle") {
+      if (supportedSeen < visibleSupportedCount) {
+        next.push(symbol);
+      } else {
+        next.push("-");
+      }
+      supportedSeen += 1;
+      continue;
+    }
+
+    next.push("-");
+  }
+
+  return next;
+}
+
+async function ensureDirectory(ffmpeg: FFmpeg, dir: string) {
+  try {
+    await ffmpeg.createDir(dir);
+  } catch {
+    // Reuse existing job directory names if needed.
+  }
+}
+
+async function cleanupDirectory(ffmpeg: FFmpeg, dir: string) {
+  try {
+    const entries = await ffmpeg.listDir(dir);
+    for (const entry of entries) {
+      if (entry.name === "." || entry.name === "..") {
+        continue;
+      }
+
+      const filePath = `${dir}/${entry.name}`;
+      if (entry.isDir) {
+        await cleanupDirectory(ffmpeg, filePath);
+      } else {
+        await ffmpeg.deleteFile(filePath);
+      }
+    }
+
+    await ffmpeg.deleteDir(dir);
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function audioBufferToWavBlob(audioBuffer: AudioBuffer) {
+  const channelCount = audioBuffer.numberOfChannels;
+  const sampleCount = audioBuffer.length;
+  const interleaved = new Float32Array(sampleCount * channelCount);
+
+  for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      interleaved[sampleIndex * channelCount + channelIndex] =
+        audioBuffer.getChannelData(channelIndex)[sampleIndex] ?? 0;
+    }
+  }
+
+  const buffer = new ArrayBuffer(44 + interleaved.length * 2);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + interleaved.length * 2, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, audioBuffer.sampleRate, true);
+  view.setUint32(28, audioBuffer.sampleRate * channelCount * 2, true);
+  view.setUint16(32, channelCount * 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, interleaved.length * 2, true);
+
+  let offset = 44;
+  for (let index = 0; index < interleaved.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, interleaved[index] ?? 0));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeAscii(view: DataView, offset: number, value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
 }
 
 async function readResponseBytes(
