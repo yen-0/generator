@@ -11,6 +11,7 @@ import {
   type ChangeEvent,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import Image from "next/image";
@@ -74,6 +75,9 @@ const SYMBOL_COLUMN_MIN = 1;
 const SYMBOL_COLUMN_MAX = 6;
 const DENOMINATOR_MIN = 1;
 const DENOMINATOR_MAX = 30;
+const PHOTO_SCALE_STEP = 0.1;
+const PHOTO_SCALE_MIN = 0.5;
+const PHOTO_SCALE_MAX = 3;
 
 const SYMBOL_COLORS: Record<SymbolOption, string> = {
   "-": "var(--text-faint)",
@@ -135,6 +139,13 @@ export function ImageSheetGenerator() {
   const photoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const pendingPhotoSlotIndexRef = useRef<number | null>(null);
+  const photoDragStateRef = useRef<{
+    pointerId: number;
+    slotIndex: number;
+    startPoint: Point;
+    startOffsetX: number;
+    startOffsetY: number;
+  } | null>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const ffmpegLoadPromiseRef = useRef<Promise<FFmpeg> | null>(null);
   const audioBufferCacheRef = useRef<Map<SupportedAnimatedSymbol, AudioBuffer> | null>(null);
@@ -528,10 +539,69 @@ export function ImageSheetGenerator() {
         ...next[index],
         dataUrl,
         fileName: file instanceof File ? file.name : next[index].fileName,
+        scale: 1,
+        offsetX: 0,
+        offsetY: 0,
       };
       return next;
     });
     setActivePhotoSlotIndex(index);
+  }
+
+  function clampPhotoScale(value: number) {
+    return Math.max(PHOTO_SCALE_MIN, Math.min(PHOTO_SCALE_MAX, value));
+  }
+
+  function updatePhotoSlotTransform(
+    index: number,
+    updates: Partial<Pick<PhotoSlotData, "scale" | "offsetX" | "offsetY">>,
+  ) {
+    setPhotoSlots((current) =>
+      current.map((slot, slotIndex) => {
+        if (slotIndex !== index) {
+          return slot;
+        }
+
+        return {
+          ...slot,
+          scale: clampPhotoScale(updates.scale ?? slot.scale),
+          offsetX: updates.offsetX ?? slot.offsetX,
+          offsetY: updates.offsetY ?? slot.offsetY,
+        };
+      }),
+    );
+  }
+
+  function stepSelectedPhotoScale(delta: number) {
+    if (activePhotoSlotIndex === null) {
+      return;
+    }
+
+    const slot = photoSlots[activePhotoSlotIndex];
+    if (!slot?.dataUrl) {
+      return;
+    }
+
+    updatePhotoSlotTransform(activePhotoSlotIndex, {
+      scale: clampPhotoScale(slot.scale + delta),
+    });
+  }
+
+  function resetSelectedPhotoTransform() {
+    if (activePhotoSlotIndex === null) {
+      return;
+    }
+
+    const slot = photoSlots[activePhotoSlotIndex];
+    if (!slot?.dataUrl) {
+      return;
+    }
+
+    updatePhotoSlotTransform(activePhotoSlotIndex, {
+      scale: 1,
+      offsetX: 0,
+      offsetY: 0,
+    });
   }
 
   function openPhotoPicker(index: number) {
@@ -553,7 +623,9 @@ export function ImageSheetGenerator() {
 
     setPhotoSlots((current) =>
       current.map((slot, index) =>
-        index === activePhotoSlotIndex ? { ...slot, dataUrl: null, fileName: null } : slot,
+        index === activePhotoSlotIndex
+          ? { ...slot, dataUrl: null, fileName: null, scale: 1, offsetX: 0, offsetY: 0 }
+          : slot,
       ),
     );
   }
@@ -589,6 +661,10 @@ export function ImageSheetGenerator() {
   }
 
   function handlePhotoCanvasClick(event: ReactMouseEvent<HTMLCanvasElement>) {
+    if (photoDragStateRef.current) {
+      return;
+    }
+
     const point = mapCanvasPointFromClient(event.clientX, event.clientY);
     if (!point) {
       return;
@@ -612,7 +688,82 @@ export function ImageSheetGenerator() {
 
     const slotIndex = getPhotoSlotIndexAtPoint(point.x, point.y);
     if (slotIndex !== null) {
+      setActivePhotoSlotIndex(slotIndex);
+      if (!photoSlots[slotIndex]?.dataUrl) {
+        openPhotoPicker(slotIndex);
+      }
+    }
+  }
+
+  function handlePhotoCanvasDoubleClick(event: ReactMouseEvent<HTMLCanvasElement>) {
+    const point = mapCanvasPointFromClient(event.clientX, event.clientY);
+    if (!point || isAnchorPlacementMode) {
+      return;
+    }
+
+    const slotIndex = getPhotoSlotIndexAtPoint(point.x, point.y);
+    if (slotIndex !== null) {
       openPhotoPicker(slotIndex);
+    }
+  }
+
+  function handlePhotoCanvasPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (isAnchorPlacementMode || event.button !== 0) {
+      return;
+    }
+
+    const point = mapCanvasPointFromClient(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    const slotIndex = getPhotoSlotIndexAtPoint(point.x, point.y);
+    if (slotIndex === null) {
+      return;
+    }
+
+    const slot = photoSlots[slotIndex];
+    setActivePhotoSlotIndex(slotIndex);
+    if (!slot?.dataUrl) {
+      return;
+    }
+
+    photoDragStateRef.current = {
+      pointerId: event.pointerId,
+      slotIndex,
+      startPoint: point,
+      startOffsetX: slot.offsetX,
+      startOffsetY: slot.offsetY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePhotoCanvasPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const dragState = photoDragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const point = mapCanvasPointFromClient(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    updatePhotoSlotTransform(dragState.slotIndex, {
+      offsetX: dragState.startOffsetX + (point.x - dragState.startPoint.x),
+      offsetY: dragState.startOffsetY + (point.y - dragState.startPoint.y),
+    });
+  }
+
+  function handlePhotoCanvasPointerEnd(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const dragState = photoDragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    photoDragStateRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }
 
@@ -918,6 +1069,9 @@ export function ImageSheetGenerator() {
   const symbolStepUpDisabled = symbolColumnCount >= SYMBOL_COLUMN_MAX;
   const selectedPhotoName =
     activePhotoSlotIndex !== null ? photoSlots[activePhotoSlotIndex]?.fileName ?? null : null;
+  const selectedPhotoScale =
+    activePhotoSlotIndex !== null ? photoSlots[activePhotoSlotIndex]?.scale ?? 1 : 1;
+  const isPhotoDragging = photoDragStateRef.current !== null;
 
   return (
     <main className={styles.page}>
@@ -1292,6 +1446,30 @@ export function ImageSheetGenerator() {
                     >
                       クリア
                     </button>
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      onClick={() => stepSelectedPhotoScale(-PHOTO_SCALE_STEP)}
+                      disabled={activePhotoSlotIndex === null || !selectedPhotoName}
+                    >
+                      縮小
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      onClick={() => stepSelectedPhotoScale(PHOTO_SCALE_STEP)}
+                      disabled={activePhotoSlotIndex === null || !selectedPhotoName}
+                    >
+                      拡大
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.ghostButton}
+                      onClick={resetSelectedPhotoTransform}
+                      disabled={activePhotoSlotIndex === null || !selectedPhotoName}
+                    >
+                      位置リセット
+                    </button>
                   </div>
                 </div>
 
@@ -1306,6 +1484,11 @@ export function ImageSheetGenerator() {
                       ? `選択中: ${selectedPhotoName}`
                       : "写真枠をクリック、ドラッグ&ドロップ、または貼り付けできます。"}
                   </span>
+                  <span className={styles.photoStatusText}>
+                    {selectedPhotoName
+                      ? `拡大率: ${Math.round(selectedPhotoScale * 100)}% / ドラッグで移動 / ダブルクリックで差し替え`
+                      : "白背景はアップロード時に透過寄りへ補正します。"}
+                  </span>
                 </div>
 
                 <div
@@ -1316,10 +1499,16 @@ export function ImageSheetGenerator() {
                   <canvas
                     ref={photoCanvasRef}
                     className={styles.photoCanvas}
+                    data-dragging={isPhotoDragging}
                     width={PHOTO_CANVAS_WIDTH}
                     height={PHOTO_CANVAS_HEIGHT}
                     style={{ aspectRatio: String(PHOTO_CANVAS_ASPECT_RATIO) }}
                     onClick={handlePhotoCanvasClick}
+                    onDoubleClick={handlePhotoCanvasDoubleClick}
+                    onPointerDown={handlePhotoCanvasPointerDown}
+                    onPointerMove={handlePhotoCanvasPointerMove}
+                    onPointerUp={handlePhotoCanvasPointerEnd}
+                    onPointerCancel={handlePhotoCanvasPointerEnd}
                   />
                 </div>
 

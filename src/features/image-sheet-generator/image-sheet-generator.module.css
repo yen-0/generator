@@ -755,7 +755,12 @@
   margin: auto;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
   background: transparent;
-  cursor: crosshair;
+  cursor: grab;
+  touch-action: none;
+}
+
+.photoCanvas[data-dragging="true"] {
+  cursor: grabbing;
 }
 
 .photoLegend {

@@ -27,6 +27,9 @@ export type PhotoSlotData = {
   id: number;
   fileName: string | null;
   dataUrl: string | null;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
 };
 
 export type Point = {
@@ -44,8 +47,15 @@ export type PhotoSlotLayout = {
   centerY: number;
 };
 
+type DrawRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type PhotoRenderAssets = {
-  slotImages: Array<HTMLImageElement | null>;
+  slotImages: Array<HTMLCanvasElement | null>;
   symbolImages: Partial<Record<SupportedAnimatedSymbol, HTMLImageElement>>;
 };
 
@@ -70,7 +80,7 @@ const LABEL_TEXT_COLORS = [
   "#0c7f67",
 ];
 
-const PLACEHOLDER_FILL = "rgba(255,255,255,0.28)";
+const EMPTY_SLOT_FILL = "rgba(255,255,255,0.28)";
 const PLACEHOLDER_BORDER = "rgba(39, 55, 76, 0.3)";
 const PLACEHOLDER_ACTIVE_BORDER = "#2c6e88";
 const PLACEHOLDER_TEXT = "#425569";
@@ -88,6 +98,9 @@ export function createPhotoSlots(count: number): PhotoSlotData[] {
     id: index + 1,
     fileName: null,
     dataUrl: null,
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
   }));
 }
 
@@ -98,6 +111,9 @@ export function normalizePhotoSlots(current: PhotoSlotData[], count: number): Ph
       id: next.length + 1,
       fileName: null,
       dataUrl: null,
+      scale: 1,
+      offsetX: 0,
+      offsetY: 0,
     });
   }
 
@@ -160,12 +176,21 @@ export function drawPhotoPreview(
   context.clearRect(0, 0, PHOTO_CANVAS_WIDTH, PHOTO_CANVAS_HEIGHT);
   const layouts = computePhotoSlotLayouts(config.photoCount);
   const visibleSymbols = (config.symbolsToShow ?? []).slice(0, config.symbolColumnCount);
+  const fallbackSlot: PhotoSlotData = {
+    id: -1,
+    fileName: null,
+    dataUrl: null,
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+  };
 
   for (const layout of layouts) {
     drawPlaceholder(
       context,
       layout,
       assets.slotImages[layout.index] ?? null,
+      config.photoSlots[layout.index] ?? fallbackSlot,
       config.activeSlotIndex === layout.index,
     );
   }
@@ -204,7 +229,7 @@ export async function loadPreviewAssets(
   photoSlots: PhotoSlotData[],
 ): Promise<PhotoRenderAssets> {
   const [slotImages, circle, cross, triangle] = await Promise.all([
-    Promise.all(photoSlots.map((slot) => loadImage(slot.dataUrl))),
+    Promise.all(photoSlots.map((slot) => loadProcessedSlotImage(slot.dataUrl))),
     loadImage("/mark_maru.png"),
     loadImage("/mark_batsu.png"),
     loadImage("/mark_sankaku.png"),
@@ -303,28 +328,46 @@ async function loadImage(source: string | null) {
 function drawPlaceholder(
   context: CanvasRenderingContext2D,
   layout: PhotoSlotLayout,
-  image: HTMLImageElement | null,
+  image: HTMLCanvasElement | null,
+  slot: PhotoSlotData,
   isActive: boolean,
 ) {
   context.save();
   context.beginPath();
   context.rect(layout.x, layout.y, layout.width, layout.height);
-  context.fillStyle = PLACEHOLDER_FILL;
-  context.fill();
 
   if (image) {
+    const imageRect = getCoverImageRect(image, layout, slot);
+
     context.save();
     context.clip();
-    drawCoverImage(context, image, layout.x, layout.y, layout.width, layout.height);
+    context.drawImage(image, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
     context.restore();
-  } else {
-    context.fillStyle = "rgba(255, 255, 255, 0.32)";
-    context.fill();
-  }
 
-  context.lineWidth = SLOT_BORDER_WIDTH;
-  context.strokeStyle = isActive ? PLACEHOLDER_ACTIVE_BORDER : PLACEHOLDER_BORDER;
-  context.stroke();
+    const visibleRect = getIntersectedRect(imageRect, {
+      x: layout.x,
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+    });
+    if (visibleRect) {
+      context.lineWidth = SLOT_BORDER_WIDTH;
+      context.strokeStyle = isActive ? PLACEHOLDER_ACTIVE_BORDER : PLACEHOLDER_BORDER;
+      context.strokeRect(
+        visibleRect.x + SLOT_BORDER_WIDTH / 2,
+        visibleRect.y + SLOT_BORDER_WIDTH / 2,
+        Math.max(0, visibleRect.width - SLOT_BORDER_WIDTH),
+        Math.max(0, visibleRect.height - SLOT_BORDER_WIDTH),
+      );
+    }
+  } else {
+    context.fillStyle = EMPTY_SLOT_FILL;
+    context.fill();
+
+    context.lineWidth = SLOT_BORDER_WIDTH;
+    context.strokeStyle = isActive ? PLACEHOLDER_ACTIVE_BORDER : PLACEHOLDER_BORDER;
+    context.stroke();
+  }
 
   if (!image) {
     context.fillStyle = PLACEHOLDER_TEXT;
@@ -406,20 +449,83 @@ function drawSymbol(
   context.drawImage(image, x, y, size, size);
 }
 
-function drawCoverImage(
-  context: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-) {
-  const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
-  const drawWidth = image.naturalWidth * scale;
-  const drawHeight = image.naturalHeight * scale;
-  const drawX = x + (width - drawWidth) / 2;
-  const drawY = y + (height - drawHeight) / 2;
-  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+function getCoverImageRect(
+  image: HTMLCanvasElement,
+  layout: PhotoSlotLayout,
+  slot: PhotoSlotData,
+): DrawRect {
+  const baseScale = Math.max(layout.width / image.width, layout.height / image.height);
+  const scale = baseScale * Math.max(0.2, slot.scale || 1);
+  const drawWidth = image.width * scale;
+  const drawHeight = image.height * scale;
+  return {
+    x: layout.x + (layout.width - drawWidth) / 2 + slot.offsetX,
+    y: layout.y + (layout.height - drawHeight) / 2 + slot.offsetY,
+    width: drawWidth,
+    height: drawHeight,
+  };
+}
+
+function getIntersectedRect(a: DrawRect, b: DrawRect): DrawRect | null {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right <= x || bottom <= y) {
+    return null;
+  }
+
+  return {
+    x,
+    y,
+    width: right - x,
+    height: bottom - y,
+  };
+}
+
+async function loadProcessedSlotImage(source: string | null) {
+  const image = await loadImage(source);
+  if (!image) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas 2D context is unavailable.");
+  }
+
+  context.drawImage(image, 0, 0);
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  for (let index = 0; index < data.length; index += 4) {
+    const red = data[index] ?? 0;
+    const green = data[index + 1] ?? 0;
+    const blue = data[index + 2] ?? 0;
+    const alpha = data[index + 3] ?? 0;
+    const brightness = (red + green + blue) / 3;
+    const colorRange = Math.max(red, green, blue) - Math.min(red, green, blue);
+
+    if (alpha === 0) {
+      continue;
+    }
+
+    if (brightness >= 252 && colorRange <= 10) {
+      data[index + 3] = 0;
+      continue;
+    }
+
+    if (brightness >= 235 && colorRange <= 18) {
+      const nextAlpha = Math.round(alpha * Math.max(0, (252 - brightness) / 17));
+      data[index + 3] = nextAlpha;
+    }
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas;
 }
 
 function clamp(value: number, min: number, max: number) {
