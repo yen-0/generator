@@ -65,6 +65,13 @@ export type PhotoRenderConfig = {
   symbolColumnCount: number;
   symbolColumnNotes: string[];
   anchors: Array<Point | null>;
+  symbolScale?: number;
+  symbolOffsetX?: number;
+  symbolOffsetY?: number;
+  labelScale?: number;
+  labelOffsetX?: number;
+  labelOffsetY?: number;
+  renderSymbolGuides?: boolean;
   symbolsToShow?: SymbolOption[];
   renderAnchorNumbers?: boolean;
   showAnchors?: boolean;
@@ -200,12 +207,16 @@ export function drawPhotoPreview(
       return;
     }
 
+    if (config.renderSymbolGuides) {
+      drawSymbolGuide(context, anchor, config);
+    }
+
     const label = config.symbolColumnNotes[index]?.trim() ?? "";
     if (config.showAnchors ?? true) {
       drawAnchor(context, anchor, index + 1, config.renderAnchorNumbers ?? false);
     }
     if (label.length > 0) {
-      drawLabel(context, anchor, label, index);
+      drawLabel(context, anchor, label, index, config);
     }
   });
 
@@ -219,7 +230,7 @@ export function drawPhotoPreview(
       return;
     }
 
-    drawSymbol(context, assets.symbolImages, symbol, anchor);
+    drawSymbol(context, assets.symbolImages, symbol, anchor, config);
   });
 
   return layouts;
@@ -408,18 +419,39 @@ function drawAnchor(
   context.restore();
 }
 
-function drawLabel(context: CanvasRenderingContext2D, anchor: Point, text: string, index: number) {
+function drawLabel(
+  context: CanvasRenderingContext2D,
+  anchor: Point,
+  text: string,
+  index: number,
+  config: PhotoRenderConfig,
+) {
   context.save();
-  context.font = `700 ${LABEL_FONT_SIZE}px ${LABEL_FONT_FAMILY}`;
+  const labelScale = Math.max(0.4, config.labelScale ?? 1);
+  const labelOffsetX = config.labelOffsetX ?? 0;
+  const labelOffsetY = config.labelOffsetY ?? 0;
+  const fontSize = LABEL_FONT_SIZE * labelScale;
+  const boxHeight = LABEL_BOX_HEIGHT * labelScale;
+  const paddingX = LABEL_BOX_PADDING_X * labelScale;
+
+  context.font = `700 ${fontSize}px ${LABEL_FONT_FAMILY}`;
   const textMetrics = context.measureText(text);
   const labelWidth = Math.min(
     PHOTO_CANVAS_WIDTH - SLOT_OUTER_PADDING_X * 2,
-    Math.max(180, textMetrics.width + LABEL_BOX_PADDING_X * 2),
+    Math.max(180 * labelScale, textMetrics.width + paddingX * 2),
   );
-  const x = clamp(anchor.x - labelWidth / 2, SLOT_OUTER_PADDING_X, PHOTO_CANVAS_WIDTH - SLOT_OUTER_PADDING_X - labelWidth);
-  const y = clamp(anchor.y + 44, 0, PHOTO_CANVAS_HEIGHT - LABEL_BOX_HEIGHT - 14);
+  const x = clamp(
+    anchor.x - labelWidth / 2 + labelOffsetX,
+    SLOT_OUTER_PADDING_X,
+    PHOTO_CANVAS_WIDTH - SLOT_OUTER_PADDING_X - labelWidth,
+  );
+  const y = clamp(
+    anchor.y + 44 + labelOffsetY,
+    0,
+    PHOTO_CANVAS_HEIGHT - boxHeight - 14,
+  );
   context.beginPath();
-  context.rect(x, y, labelWidth, LABEL_BOX_HEIGHT);
+  context.rect(x, y, labelWidth, boxHeight);
   context.fillStyle = LABEL_BACKGROUND;
   context.strokeStyle = LABEL_BORDER;
   context.lineWidth = 2;
@@ -428,7 +460,7 @@ function drawLabel(context: CanvasRenderingContext2D, anchor: Point, text: strin
   context.fillStyle = LABEL_TEXT_COLORS[index % LABEL_TEXT_COLORS.length];
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(text, x + labelWidth / 2, y + LABEL_BOX_HEIGHT / 2 + 2);
+  context.fillText(text, x + labelWidth / 2, y + boxHeight / 2 + 2 * labelScale);
   context.restore();
 }
 
@@ -437,16 +469,39 @@ function drawSymbol(
   symbolImages: PhotoRenderAssets["symbolImages"],
   symbol: SymbolOption,
   anchor: Point,
+  config: PhotoRenderConfig,
 ) {
   const image = symbolImages[symbol as SupportedAnimatedSymbol];
+  const { x, y, size } = getSymbolRect(anchor, config);
+
   if (!image) {
     return;
   }
 
-  const size = 176;
-  const x = anchor.x - size / 2;
-  const y = anchor.y - size / 2;
   context.drawImage(image, x, y, size, size);
+}
+
+function drawSymbolGuide(
+  context: CanvasRenderingContext2D,
+  anchor: Point,
+  config: PhotoRenderConfig,
+) {
+  const { x, y, size } = getSymbolRect(anchor, config);
+  context.save();
+  context.setLineDash([10, 8]);
+  context.lineWidth = 3;
+  context.strokeStyle = "rgba(44, 110, 136, 0.95)";
+  context.strokeRect(x, y, size, size);
+  context.restore();
+}
+
+function getSymbolRect(anchor: Point, config: PhotoRenderConfig) {
+  const size = 176 * Math.max(0.3, config.symbolScale ?? 1);
+  return {
+    x: anchor.x - size / 2 + (config.symbolOffsetX ?? 0),
+    y: anchor.y - size / 2 + (config.symbolOffsetY ?? 0),
+    size,
+  };
 }
 
 function getCoverImageRect(

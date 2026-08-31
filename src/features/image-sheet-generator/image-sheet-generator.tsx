@@ -78,6 +78,8 @@ const DENOMINATOR_MAX = 30;
 const PHOTO_SCALE_STEP = 0.1;
 const PHOTO_SCALE_MIN = 0.5;
 const PHOTO_SCALE_MAX = 3;
+const OVERLAY_SCALE_STEP = 0.1;
+const OVERLAY_OFFSET_STEP = 24;
 
 const SYMBOL_COLORS: Record<SymbolOption, string> = {
   "-": "var(--text-faint)",
@@ -129,6 +131,13 @@ export function ImageSheetGenerator() {
   const [photoAnchors, setPhotoAnchors] = useState<Array<Point | null>>(
     () => getAutomaticAnchors(INITIAL_SYMBOL_COLUMN_COUNT, INITIAL_SYMBOL_COLUMN_COUNT),
   );
+  const [photoSymbolScale, setPhotoSymbolScale] = useState(1);
+  const [photoSymbolOffsetX, setPhotoSymbolOffsetX] = useState(0);
+  const [photoSymbolOffsetY, setPhotoSymbolOffsetY] = useState(0);
+  const [photoLabelScale, setPhotoLabelScale] = useState(1);
+  const [photoLabelOffsetX, setPhotoLabelOffsetX] = useState(0);
+  const [photoLabelOffsetY, setPhotoLabelOffsetY] = useState(0);
+  const [isPhotoPanelCollapsed, setIsPhotoPanelCollapsed] = useState(false);
   const [activePhotoSlotIndex, setActivePhotoSlotIndex] = useState<number | null>(0);
   const [isAnchorPlacementMode, setIsAnchorPlacementMode] = useState(false);
   const [anchorPlacementIndex, setAnchorPlacementIndex] = useState(0);
@@ -230,6 +239,14 @@ export function ImageSheetGenerator() {
       symbolColumnCount,
       symbolColumnNotes,
       anchors: photoAnchors,
+      symbolsToShow: rows[safePreviewIndex]?.symbols ?? [],
+      symbolScale: photoSymbolScale,
+      symbolOffsetX: photoSymbolOffsetX,
+      symbolOffsetY: photoSymbolOffsetY,
+      labelScale: photoLabelScale,
+      labelOffsetX: photoLabelOffsetX,
+      labelOffsetY: photoLabelOffsetY,
+      renderSymbolGuides: true,
       renderAnchorNumbers: isAnchorPlacementMode,
       activeSlotIndex: activePhotoSlotIndex,
     });
@@ -248,7 +265,15 @@ export function ImageSheetGenerator() {
     photoAnchors,
     photoAssets,
     photoCount,
+    photoLabelOffsetX,
+    photoLabelOffsetY,
+    photoLabelScale,
     photoSlots,
+    rows,
+    safePreviewIndex,
+    photoSymbolOffsetX,
+    photoSymbolOffsetY,
+    photoSymbolScale,
     symbolColumnCount,
     symbolColumnNotes,
   ]);
@@ -604,6 +629,40 @@ export function ImageSheetGenerator() {
     });
   }
 
+  function clampOverlayScale(value: number) {
+    return Math.max(0.3, Math.min(3, value));
+  }
+
+  function stepPhotoSymbolScale(delta: number) {
+    setPhotoSymbolScale((current) => clampOverlayScale(current + delta));
+  }
+
+  function movePhotoSymbols(deltaX: number, deltaY: number) {
+    setPhotoSymbolOffsetX((current) => current + deltaX);
+    setPhotoSymbolOffsetY((current) => current + deltaY);
+  }
+
+  function resetPhotoSymbols() {
+    setPhotoSymbolScale(1);
+    setPhotoSymbolOffsetX(0);
+    setPhotoSymbolOffsetY(0);
+  }
+
+  function stepPhotoLabelScale(delta: number) {
+    setPhotoLabelScale((current) => clampOverlayScale(current + delta));
+  }
+
+  function movePhotoLabels(deltaX: number, deltaY: number) {
+    setPhotoLabelOffsetX((current) => current + deltaX);
+    setPhotoLabelOffsetY((current) => current + deltaY);
+  }
+
+  function resetPhotoLabels() {
+    setPhotoLabelScale(1);
+    setPhotoLabelOffsetX(0);
+    setPhotoLabelOffsetY(0);
+  }
+
   function openPhotoPicker(index: number) {
     pendingPhotoSlotIndexRef.current = index;
     setActivePhotoSlotIndex(index);
@@ -843,6 +902,12 @@ export function ImageSheetGenerator() {
         symbolColumnCount,
         symbolColumnNotes,
         anchors: photoAnchors,
+        symbolScale: photoSymbolScale,
+        symbolOffsetX: photoSymbolOffsetX,
+        symbolOffsetY: photoSymbolOffsetY,
+        labelScale: photoLabelScale,
+        labelOffsetX: photoLabelOffsetX,
+        labelOffsetY: photoLabelOffsetY,
         showAnchors: false,
       });
       const previewBlob = await canvasToBlob(exportCanvas, "image/png");
@@ -874,6 +939,12 @@ export function ImageSheetGenerator() {
             symbolColumnCount,
             symbolColumnNotes,
             anchors: photoAnchors,
+            symbolScale: photoSymbolScale,
+            symbolOffsetX: photoSymbolOffsetX,
+            symbolOffsetY: photoSymbolOffsetY,
+            labelScale: photoLabelScale,
+            labelOffsetX: photoLabelOffsetX,
+            labelOffsetY: photoLabelOffsetY,
             symbolsToShow: partialSymbols,
             showAnchors: false,
           });
@@ -1404,98 +1475,200 @@ export function ImageSheetGenerator() {
 
             {activePreviewTab === "photo" && (
               <>
-                <div className={styles.photoToolbar}>
-                  <div className={styles.photoToolbarGroup}>
-                    <span className={styles.photoLabel}>図の数</span>
-                    <button
-                      type="button"
-                      className={styles.stepBtn}
-                      onClick={() => updatePhotoCount(photoCount - 1)}
-                      disabled={photoCount <= PHOTO_COUNT_MIN}
-                    >
-                      −
-                    </button>
-                    <span className={styles.stepValue}>{photoCount}</span>
-                    <button
-                      type="button"
-                      className={styles.stepBtn}
-                      onClick={() => updatePhotoCount(photoCount + 1)}
-                      disabled={photoCount >= PHOTO_COUNT_MAX}
-                    >
-                      ＋
-                    </button>
-                  </div>
-                  <div className={styles.photoToolbarGroup}>
-                    {photoNeedsManualAnchors && (
-                      <button type="button" className={styles.ghostButton} onClick={startAnchorPlacement}>
-                        アンカーを設定
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className={styles.ghostButton}
-                      onClick={() => openPhotoPicker(activePhotoSlotIndex ?? 0)}
-                    >
-                      画像を選択
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.ghostButton}
-                      onClick={clearSelectedPhoto}
-                      disabled={activePhotoSlotIndex === null}
-                    >
-                      クリア
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.ghostButton}
-                      onClick={() => stepSelectedPhotoScale(-PHOTO_SCALE_STEP)}
-                      disabled={activePhotoSlotIndex === null || !selectedPhotoName}
-                    >
-                      縮小
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.ghostButton}
-                      onClick={() => stepSelectedPhotoScale(PHOTO_SCALE_STEP)}
-                      disabled={activePhotoSlotIndex === null || !selectedPhotoName}
-                    >
-                      拡大
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.ghostButton}
-                      onClick={resetSelectedPhotoTransform}
-                      disabled={activePhotoSlotIndex === null || !selectedPhotoName}
-                    >
-                      位置リセット
-                    </button>
-                  </div>
-                </div>
-
-                <div className={styles.photoStatusRow}>
-                  <span className={styles.photoStatusText}>
-                    {photoNeedsManualAnchors
-                      ? currentAnchorStepLabel ?? "アンカーを手動で設定してください。"
-                      : "記号数と図の数が同じなのでアンカーは自動配置です。"}
-                  </span>
-                  <span className={styles.photoStatusText}>
-                    {selectedPhotoName
-                      ? `選択中: ${selectedPhotoName}`
-                      : "写真枠をクリック、ドラッグ&ドロップ、または貼り付けできます。"}
-                  </span>
-                  <span className={styles.photoStatusText}>
-                    {selectedPhotoName
-                      ? `拡大率: ${Math.round(selectedPhotoScale * 100)}% / ドラッグで移動 / ダブルクリックで差し替え`
-                      : "白背景はアップロード時に透過寄りへ補正します。"}
-                  </span>
-                </div>
-
                 <div
                   className={styles.photoCanvasShell}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => void handlePhotoDrop(event)}
                 >
+                  <div className={styles.photoFloatingPanel} data-collapsed={isPhotoPanelCollapsed}>
+                    <div className={styles.photoFloatingHeader}>
+                      <span className={styles.photoLabel}>
+                        {selectedPhotoName ? `${Math.round(selectedPhotoScale * 100)}%` : "Controls"}
+                      </span>
+                      <button
+                        type="button"
+                        className={styles.ghostButton}
+                        onClick={() => setIsPhotoPanelCollapsed((current) => !current)}
+                        aria-expanded={!isPhotoPanelCollapsed}
+                      >
+                        {isPhotoPanelCollapsed ? "Open" : "Close"}
+                      </button>
+                    </div>
+                    {!isPhotoPanelCollapsed && (
+                      <>
+                        <div className={styles.photoToolbarGroup}>
+                          <span className={styles.photoLabel}>Photos</span>
+                          <button
+                            type="button"
+                            className={styles.stepBtn}
+                            onClick={() => updatePhotoCount(photoCount - 1)}
+                            disabled={photoCount <= PHOTO_COUNT_MIN}
+                          >
+                            −
+                          </button>
+                          <span className={styles.stepValue}>{photoCount}</span>
+                          <button
+                            type="button"
+                            className={styles.stepBtn}
+                            onClick={() => updatePhotoCount(photoCount + 1)}
+                            disabled={photoCount >= PHOTO_COUNT_MAX}
+                          >
+                            ＋
+                          </button>
+                        </div>
+                        <div className={styles.photoToolbarGroup}>
+                          {photoNeedsManualAnchors && (
+                            <button type="button" className={styles.ghostButton} onClick={startAnchorPlacement}>
+                              アンカーを設定
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => openPhotoPicker(activePhotoSlotIndex ?? 0)}
+                          >
+                            画像を選択
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={clearSelectedPhoto}
+                            disabled={activePhotoSlotIndex === null}
+                          >
+                            クリア
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => stepSelectedPhotoScale(-PHOTO_SCALE_STEP)}
+                            disabled={activePhotoSlotIndex === null || !selectedPhotoName}
+                          >
+                            縮小
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => stepSelectedPhotoScale(PHOTO_SCALE_STEP)}
+                            disabled={activePhotoSlotIndex === null || !selectedPhotoName}
+                          >
+                            拡大
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={resetSelectedPhotoTransform}
+                            disabled={activePhotoSlotIndex === null || !selectedPhotoName}
+                          >
+                            位置リセット
+                          </button>
+                        </div>
+                        <div className={styles.photoToolbarGroup}>
+                          <span className={styles.photoLabel}>Marks</span>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => stepPhotoSymbolScale(-OVERLAY_SCALE_STEP)}
+                          >
+                            -
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => stepPhotoSymbolScale(OVERLAY_SCALE_STEP)}
+                          >
+                            +
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoSymbols(-OVERLAY_OFFSET_STEP, 0)}
+                          >
+                            L
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoSymbols(OVERLAY_OFFSET_STEP, 0)}
+                          >
+                            R
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoSymbols(0, -OVERLAY_OFFSET_STEP)}
+                          >
+                            U
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoSymbols(0, OVERLAY_OFFSET_STEP)}
+                          >
+                            D
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={resetPhotoSymbols}
+                          >
+                            0
+                          </button>
+                        </div>
+                        <div className={styles.photoToolbarGroup}>
+                          <span className={styles.photoLabel}>Labels</span>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => stepPhotoLabelScale(-OVERLAY_SCALE_STEP)}
+                          >
+                            -
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => stepPhotoLabelScale(OVERLAY_SCALE_STEP)}
+                          >
+                            +
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoLabels(-OVERLAY_OFFSET_STEP, 0)}
+                          >
+                            L
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoLabels(OVERLAY_OFFSET_STEP, 0)}
+                          >
+                            R
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoLabels(0, -OVERLAY_OFFSET_STEP)}
+                          >
+                            U
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={() => movePhotoLabels(0, OVERLAY_OFFSET_STEP)}
+                          >
+                            D
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.ghostButton}
+                            onClick={resetPhotoLabels}
+                          >
+                            0
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                   <canvas
                     ref={photoCanvasRef}
                     className={styles.photoCanvas}
@@ -1511,13 +1684,6 @@ export function ImageSheetGenerator() {
                     onPointerCancel={handlePhotoCanvasPointerEnd}
                   />
                 </div>
-
-                <div className={styles.photoLegend}>
-                  <span>下 1/3 に写真枠を配置</span>
-                  <span>メモはアンカー下に表示</span>
-                  <span>対応記号: ○ / × / △</span>
-                </div>
-
                 <input
                   ref={photoInputRef}
                   className={styles.hiddenInput}
