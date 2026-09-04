@@ -6,14 +6,15 @@ export const PHOTO_CANVAS_WIDTH = 1080;
 export const PHOTO_CANVAS_HEIGHT = 1920;
 export const PHOTO_CANVAS_ASPECT_RATIO = PHOTO_CANVAS_WIDTH / PHOTO_CANVAS_HEIGHT;
 export const PHOTO_COUNT_MIN = 1;
-export const PHOTO_COUNT_MAX = 6;
+export const PHOTO_ROW_COUNT_MIN = 1;
 export const PHOTO_EXPORT_FPS = 30;
 export const PHOTO_SYMBOL_MARGIN_SECONDS = 0.08;
 
 const PHOTO_AREA_RATIO = 1 / 3;
-const SLOT_OUTER_PADDING_X = 54;
-const SLOT_OUTER_PADDING_Y = 46;
-const SLOT_GAP = 28;
+const SLOT_OUTER_PADDING_X = 12;
+const SLOT_OUTER_PADDING_Y = 12;
+const SLOT_GAP = 6;
+const SLOT_ROW_GAP = 4;
 const SLOT_BORDER_WIDTH = 4;
 const ANCHOR_RADIUS = 18;
 const LABEL_BOX_HEIGHT = 88;
@@ -61,6 +62,7 @@ export type PhotoRenderAssets = {
 
 export type PhotoRenderConfig = {
   photoCount: number;
+  photoRowCount: number;
   photoSlots: PhotoSlotData[];
   symbolColumnCount: number;
   symbolColumnNotes: string[];
@@ -76,6 +78,8 @@ export type PhotoRenderConfig = {
   renderAnchorNumbers?: boolean;
   showAnchors?: boolean;
   activeSlotIndex?: number | null;
+  activeSlotIndices?: number[];
+  fillBackground?: boolean;
 };
 
 const LABEL_TEXT_COLORS = [
@@ -97,7 +101,12 @@ const LABEL_BACKGROUND = "#e7d98b";
 const LABEL_BORDER = "rgba(64, 50, 10, 0.22)";
 
 export function clampPhotoCount(value: number) {
-  return Math.max(PHOTO_COUNT_MIN, Math.min(PHOTO_COUNT_MAX, Math.trunc(value || PHOTO_COUNT_MIN)));
+  return Math.max(PHOTO_COUNT_MIN, Math.trunc(value || PHOTO_COUNT_MIN));
+}
+
+export function clampPhotoRowCount(value: number, photoCount: number) {
+  void photoCount;
+  return Math.max(PHOTO_ROW_COUNT_MIN, Math.trunc(value || PHOTO_ROW_COUNT_MIN));
 }
 
 export function createPhotoSlots(count: number): PhotoSlotData[] {
@@ -140,18 +149,27 @@ export function normalizeAnchors(current: Array<Point | null>, symbolColumnCount
   return next;
 }
 
-export function computePhotoSlotLayouts(photoCount: number): PhotoSlotLayout[] {
+export function computePhotoSlotLayouts(
+  photoCount: number,
+  photoRowCount = PHOTO_ROW_COUNT_MIN,
+): PhotoSlotLayout[] {
   const safeCount = clampPhotoCount(photoCount);
+  const safeRowCount = clampPhotoRowCount(photoRowCount, safeCount);
   const areaHeight = PHOTO_CANVAS_HEIGHT * PHOTO_AREA_RATIO;
   const areaTop = PHOTO_CANVAS_HEIGHT - areaHeight;
+  const columnCount = Math.ceil(safeCount / safeRowCount);
   const usableWidth =
-    PHOTO_CANVAS_WIDTH - SLOT_OUTER_PADDING_X * 2 - SLOT_GAP * Math.max(0, safeCount - 1);
-  const slotWidth = usableWidth / safeCount;
-  const slotHeight = areaHeight - SLOT_OUTER_PADDING_Y * 2;
-  const y = areaTop + SLOT_OUTER_PADDING_Y;
+    PHOTO_CANVAS_WIDTH - SLOT_OUTER_PADDING_X * 2 - SLOT_GAP * Math.max(0, columnCount - 1);
+  const usableHeight =
+    areaHeight - SLOT_OUTER_PADDING_Y * 2 - SLOT_ROW_GAP * Math.max(0, safeRowCount - 1);
+  const slotWidth = usableWidth / columnCount;
+  const slotHeight = usableHeight / safeRowCount;
 
   return Array.from({ length: safeCount }, (_, index) => {
-    const x = SLOT_OUTER_PADDING_X + index * (slotWidth + SLOT_GAP);
+    const rowIndex = Math.floor(index / columnCount);
+    const columnIndex = index % columnCount;
+    const x = SLOT_OUTER_PADDING_X + columnIndex * (slotWidth + SLOT_GAP);
+    const y = areaTop + SLOT_OUTER_PADDING_Y + rowIndex * (slotHeight + SLOT_ROW_GAP);
     return {
       index,
       x,
@@ -164,12 +182,16 @@ export function computePhotoSlotLayouts(photoCount: number): PhotoSlotLayout[] {
   });
 }
 
-export function getAutomaticAnchors(photoCount: number, symbolColumnCount: number) {
+export function getAutomaticAnchors(
+  photoCount: number,
+  symbolColumnCount: number,
+  photoRowCount = PHOTO_ROW_COUNT_MIN,
+) {
   if (photoCount !== symbolColumnCount) {
     return createAnchorArray(symbolColumnCount);
   }
 
-  return computePhotoSlotLayouts(photoCount).map((layout) => ({
+  return computePhotoSlotLayouts(photoCount, photoRowCount).map((layout) => ({
     x: layout.centerX,
     y: layout.centerY,
   }));
@@ -180,8 +202,13 @@ export function drawPhotoPreview(
   assets: PhotoRenderAssets,
   config: PhotoRenderConfig,
 ) {
-  context.clearRect(0, 0, PHOTO_CANVAS_WIDTH, PHOTO_CANVAS_HEIGHT);
-  const layouts = computePhotoSlotLayouts(config.photoCount);
+  if (config.fillBackground ?? true) {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, PHOTO_CANVAS_WIDTH, PHOTO_CANVAS_HEIGHT);
+  } else {
+    context.clearRect(0, 0, PHOTO_CANVAS_WIDTH, PHOTO_CANVAS_HEIGHT);
+  }
+  const layouts = computePhotoSlotLayouts(config.photoCount, config.photoRowCount);
   const visibleSymbols = (config.symbolsToShow ?? []).slice(0, config.symbolColumnCount);
   const fallbackSlot: PhotoSlotData = {
     id: -1,
@@ -193,12 +220,14 @@ export function drawPhotoPreview(
   };
 
   for (const layout of layouts) {
+    const isSelected =
+      config.activeSlotIndices?.includes(layout.index) ?? config.activeSlotIndex === layout.index;
     drawPlaceholder(
       context,
       layout,
       assets.slotImages[layout.index] ?? null,
       config.photoSlots[layout.index] ?? fallbackSlot,
-      config.activeSlotIndex === layout.index,
+      isSelected,
     );
   }
 
@@ -269,7 +298,7 @@ export function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png", qual
   });
 }
 
-export function buildMp4FileName(rowNumber: number, text: string) {
+export function buildMovFileName(rowNumber: number, text: string) {
   const normalized = text
     .replace(/\r\n/g, "\n")
     .split("\n")
@@ -277,7 +306,7 @@ export function buildMp4FileName(rowNumber: number, text: string) {
     .filter(Boolean)
     .join(" ");
   const safeText = sanitizeFileName(normalized) || `row_${rowNumber}`;
-  return `${rowNumber}_${safeText}.mp4`;
+  return `${rowNumber}_${safeText}.mov`;
 }
 
 export function getVisibleAnimatedSymbols(symbols: SymbolOption[]) {
@@ -553,33 +582,6 @@ async function loadProcessedSlotImage(source: string | null) {
   }
 
   context.drawImage(image, 0, 0);
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-
-  for (let index = 0; index < data.length; index += 4) {
-    const red = data[index] ?? 0;
-    const green = data[index + 1] ?? 0;
-    const blue = data[index + 2] ?? 0;
-    const alpha = data[index + 3] ?? 0;
-    const brightness = (red + green + blue) / 3;
-    const colorRange = Math.max(red, green, blue) - Math.min(red, green, blue);
-
-    if (alpha === 0) {
-      continue;
-    }
-
-    if (brightness >= 252 && colorRange <= 10) {
-      data[index + 3] = 0;
-      continue;
-    }
-
-    if (brightness >= 235 && colorRange <= 18) {
-      const nextAlpha = Math.round(alpha * Math.max(0, (252 - brightness) / 17));
-      data[index + 3] = nextAlpha;
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
   return canvas;
 }
 

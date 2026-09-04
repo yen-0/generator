@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   startTransition,
@@ -12,6 +12,8 @@ import {
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type UIEvent,
+  type ReactNode,
 } from "react";
 import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import Image from "next/image";
@@ -38,9 +40,10 @@ import {
 } from "./generator-client-render";
 import {
   buildFrameSymbolSequence,
-  buildMp4FileName,
+  buildMovFileName,
   canvasToBlob,
   clampPhotoCount,
+  clampPhotoRowCount,
   computePhotoSlotLayouts,
   createAnchorArray,
   createPhotoSlots,
@@ -55,10 +58,10 @@ import {
   PHOTO_CANVAS_ASPECT_RATIO,
   PHOTO_CANVAS_HEIGHT,
   PHOTO_CANVAS_WIDTH,
-  PHOTO_COUNT_MAX,
   PHOTO_COUNT_MIN,
   PHOTO_EXPORT_FPS,
   PHOTO_SYMBOL_MARGIN_SECONDS,
+  PHOTO_ROW_COUNT_MIN,
   type PhotoRenderAssets,
   type PhotoSlotData,
   type Point,
@@ -69,12 +72,26 @@ type ProgressPhase = "idle" | "preparing" | "rendering" | "downloading" | "compl
 type PreviewTab = "preview" | "photo";
 type SupportedAnimatedSymbol = Extract<SymbolOption, "circle" | "cross" | "triangle">;
 
+function normalizeSelectedPhotoSlotIndices(
+  indices: number[],
+  count: number,
+  fallbackIndex: number | null,
+) {
+  const next = Array.from(
+    new Set(indices.filter((index) => index >= 0 && index < count)),
+  ).sort((left, right) => left - right);
+
+  if (next.length > 0) {
+    return next;
+  }
+
+  return [Math.max(0, Math.min(fallbackIndex ?? 0, count - 1))];
+}
+
 const INITIAL_ROWS = createDefaultRows(7, INITIAL_SYMBOL_COLUMN_COUNT);
 const PREVIEW_DEBOUNCE_MS = 220;
 const SYMBOL_COLUMN_MIN = 1;
-const SYMBOL_COLUMN_MAX = 6;
 const DENOMINATOR_MIN = 1;
-const DENOMINATOR_MAX = 30;
 const PHOTO_SCALE_STEP = 0.1;
 const PHOTO_SCALE_MIN = 0.5;
 const PHOTO_SCALE_MAX = 3;
@@ -95,7 +112,7 @@ const HELP_TEXT = [
   "図の数と記号数が同じ場合、アンカーは写真枠の中央に自動配置されます。",
   "図の数と記号数が違う場合は「アンカーを設定」を押して、プレビュー上を順番にクリックしてください。",
   "メモ欄の内容はアンカー下のラベルとして左から順に表示されます。",
-  "MP4生成では 0_preview.png と各行の MP4 をまとめた ZIP をブラウザ内で作成します。",
+  "MOV生成では 0_preview.png と各行の MOV をまとめた ZIP をブラウザ内で作成します。",
 ];
 
 const SOUND_PATHS: Record<SupportedAnimatedSymbol, string> = {
@@ -125,11 +142,12 @@ export function ImageSheetGenerator() {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [activePreviewTab, setActivePreviewTab] = useState<PreviewTab>("preview");
   const [photoCount, setPhotoCount] = useState(INITIAL_SYMBOL_COLUMN_COUNT);
+  const [photoRowCount, setPhotoRowCount] = useState(PHOTO_ROW_COUNT_MIN);
   const [photoSlots, setPhotoSlots] = useState<PhotoSlotData[]>(
     () => createPhotoSlots(INITIAL_SYMBOL_COLUMN_COUNT),
   );
   const [photoAnchors, setPhotoAnchors] = useState<Array<Point | null>>(
-    () => getAutomaticAnchors(INITIAL_SYMBOL_COLUMN_COUNT, INITIAL_SYMBOL_COLUMN_COUNT),
+    () => getAutomaticAnchors(INITIAL_SYMBOL_COLUMN_COUNT, INITIAL_SYMBOL_COLUMN_COUNT, PHOTO_ROW_COUNT_MIN),
   );
   const [photoSymbolScale, setPhotoSymbolScale] = useState(1);
   const [photoSymbolOffsetX, setPhotoSymbolOffsetX] = useState(0);
@@ -139,15 +157,19 @@ export function ImageSheetGenerator() {
   const [photoLabelOffsetY, setPhotoLabelOffsetY] = useState(0);
   const [isPhotoPanelCollapsed, setIsPhotoPanelCollapsed] = useState(false);
   const [activePhotoSlotIndex, setActivePhotoSlotIndex] = useState<number | null>(0);
+  const [selectedPhotoSlotIndices, setSelectedPhotoSlotIndices] = useState<number[]>([0]);
   const [isAnchorPlacementMode, setIsAnchorPlacementMode] = useState(false);
   const [anchorPlacementIndex, setAnchorPlacementIndex] = useState(0);
   const [photoAssets, setPhotoAssets] = useState<PhotoRenderAssets | null>(null);
 
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  const tableRef = useRef<HTMLTableElement | null>(null);
   const photoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const pendingPhotoSlotIndexRef = useRef<number | null>(null);
+  const symbolStripScrollFrameRef = useRef<number | null>(null);
+  const symbolStripScrollLeftRef = useRef(0);
   const photoDragStateRef = useRef<{
     pointerId: number;
     slotIndex: number;
@@ -162,10 +184,6 @@ export function ImageSheetGenerator() {
   const previewCount = getPreviewCount(rows.length);
   const safePreviewIndex = clampPreviewIndex(previewIndex, rows.length);
   const photoNeedsManualAnchors = photoCount !== symbolColumnCount;
-  const currentAnchorStepLabel =
-    isAnchorPlacementMode && anchorPlacementIndex < symbolColumnCount
-      ? `アンカー ${anchorPlacementIndex + 1} / ${symbolColumnCount}`
-      : null;
 
   useEffect(() => {
     if (safePreviewIndex !== previewIndex) {
@@ -195,6 +213,10 @@ export function ImageSheetGenerator() {
 
   useEffect(() => {
     setPhotoSlots((current) => normalizePhotoSlots(current, photoCount));
+    setPhotoRowCount((current) => clampPhotoRowCount(current, photoCount));
+    setSelectedPhotoSlotIndices((current) =>
+      normalizeSelectedPhotoSlotIndices(current, photoCount, 0),
+    );
     setActivePhotoSlotIndex((current) => {
       if (photoCount <= 0) {
         return null;
@@ -206,9 +228,26 @@ export function ImageSheetGenerator() {
     });
   }, [photoCount]);
 
+  const applySymbolStripScrollLeft = (scrollLeft: number) => {
+    symbolStripScrollLeftRef.current = scrollLeft;
+
+    if (symbolStripScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(symbolStripScrollFrameRef.current);
+    }
+
+    symbolStripScrollFrameRef.current = window.requestAnimationFrame(() => {
+      tableRef.current?.style.setProperty("--symbol-strip-scroll-left", `${symbolStripScrollLeftRef.current}px`);
+      symbolStripScrollFrameRef.current = null;
+    });
+  };
+
+  useEffect(() => {
+    applySymbolStripScrollLeft(0);
+  }, [symbolColumnCount]);
+
   useEffect(() => {
     if (photoCount === symbolColumnCount) {
-      setPhotoAnchors(getAutomaticAnchors(photoCount, symbolColumnCount));
+      setPhotoAnchors(getAutomaticAnchors(photoCount, symbolColumnCount, photoRowCount));
       setIsAnchorPlacementMode(false);
       setAnchorPlacementIndex(symbolColumnCount);
       return;
@@ -216,7 +255,7 @@ export function ImageSheetGenerator() {
 
     setPhotoAnchors((current) => normalizeAnchors(current, symbolColumnCount));
     setAnchorPlacementIndex((current) => Math.min(current, Math.max(0, symbolColumnCount - 1)));
-  }, [photoCount, symbolColumnCount]);
+  }, [photoCount, photoRowCount, symbolColumnCount]);
 
   const redrawPhotoCanvas = useEffectEvent(() => {
     if (!photoAssets) {
@@ -235,6 +274,7 @@ export function ImageSheetGenerator() {
 
     drawPhotoPreview(context, photoAssets, {
       photoCount,
+      photoRowCount,
       photoSlots,
       symbolColumnCount,
       symbolColumnNotes,
@@ -249,6 +289,8 @@ export function ImageSheetGenerator() {
       renderSymbolGuides: true,
       renderAnchorNumbers: isAnchorPlacementMode,
       activeSlotIndex: activePhotoSlotIndex,
+      activeSlotIndices: selectedPhotoSlotIndices,
+      fillBackground: true,
     });
   });
 
@@ -265,6 +307,7 @@ export function ImageSheetGenerator() {
     photoAnchors,
     photoAssets,
     photoCount,
+    photoRowCount,
     photoLabelOffsetX,
     photoLabelOffsetY,
     photoLabelScale,
@@ -274,6 +317,7 @@ export function ImageSheetGenerator() {
     photoSymbolOffsetX,
     photoSymbolOffsetY,
     photoSymbolScale,
+    selectedPhotoSlotIndices,
     symbolColumnCount,
     symbolColumnNotes,
   ]);
@@ -450,13 +494,6 @@ export function ImageSheetGenerator() {
     });
   }
 
-  function stepSymbolColumnCount(delta: number) {
-    const next = Math.max(SYMBOL_COLUMN_MIN, Math.min(SYMBOL_COLUMN_MAX, symbolColumnCount + delta));
-    if (next !== symbolColumnCount) {
-      updateSymbolColumnCount(next);
-    }
-  }
-
   function updateSymbolColumnNote(index: number, value: string) {
     setSymbolColumnNotes((current) => {
       const next = [...current];
@@ -477,28 +514,22 @@ export function ImageSheetGenerator() {
   }
 
   function updateDenominatorMode(value: DenominatorMode) {
-    setDenominatorMode(value);
+    const nextValue = Math.max(DENOMINATOR_MIN, Math.trunc(value));
+    setDenominatorMode(nextValue);
     setRows((current) => {
-      const nextRows: GeneratorRow[] = current.slice(0, value).map((row, index) => ({
+      const nextRows: GeneratorRow[] = current.slice(0, nextValue).map((row, index) => ({
         ...row,
         numerator: index + 1,
-        denominator: value,
+        denominator: nextValue,
       }));
 
-      while (nextRows.length < value) {
-        nextRows.push(createRow(nextRows.length + 1, nextRows.length + 1, value, symbolColumnCount));
+      while (nextRows.length < nextValue) {
+        nextRows.push(createRow(nextRows.length + 1, nextRows.length + 1, nextValue, symbolColumnCount));
       }
 
       return nextRows;
     });
-    setNextId((current) => Math.max(current, value + 1));
-  }
-
-  function stepDenominatorMode(delta: number) {
-    const next = Math.max(DENOMINATOR_MIN, Math.min(DENOMINATOR_MAX, denominatorMode + delta));
-    if (next !== denominatorMode) {
-      updateDenominatorMode(next);
-    }
+    setNextId((current) => Math.max(current, nextValue + 1));
   }
 
   function updateRowFontSize(id: number, value: string) {
@@ -549,7 +580,34 @@ export function ImageSheetGenerator() {
   }
 
   function updatePhotoCount(value: number) {
-    setPhotoCount(clampPhotoCount(value));
+    const nextValue = clampPhotoCount(value);
+    setPhotoCount(nextValue);
+  }
+
+  function updatePhotoRowCount(value: number) {
+    setPhotoRowCount(clampPhotoRowCount(value, photoCount));
+  }
+
+  function setPhotoSelection(indices: number[]) {
+    setSelectedPhotoSlotIndices(normalizeSelectedPhotoSlotIndices(indices, photoCount, activePhotoSlotIndex));
+  }
+
+  function selectActivePhotoSlot(index: number) {
+    setActivePhotoSlotIndex(index);
+    setPhotoSelection([index]);
+  }
+
+  function selectAllPhotoSlots() {
+    setSelectedPhotoSlotIndices(Array.from({ length: photoCount }, (_, index) => index));
+    setActivePhotoSlotIndex((current) => current ?? 0);
+  }
+
+  function resetToSinglePhotoSelection() {
+    if (activePhotoSlotIndex === null) {
+      return;
+    }
+
+    setPhotoSelection([activePhotoSlotIndex]);
   }
 
   async function setPhotoSlotFromFile(index: number, file: Blob) {
@@ -570,7 +628,44 @@ export function ImageSheetGenerator() {
       };
       return next;
     });
-    setActivePhotoSlotIndex(index);
+    selectActivePhotoSlot(index);
+  }
+
+  async function setPhotoSlotsFromFiles(startIndex: number, files: Blob[]) {
+    const items = await Promise.all(files.map(async (file) => ({
+      file,
+      dataUrl: await fileToDataUrl(file),
+    })));
+
+    setPhotoSlots((current) => {
+      const next = normalizePhotoSlots(current, photoCount);
+
+      items.forEach(({ file, dataUrl }, offset) => {
+        const slotIndex = startIndex + offset;
+        if (!next[slotIndex]) {
+          return;
+        }
+
+        next[slotIndex] = {
+          ...next[slotIndex],
+          dataUrl,
+          fileName: file instanceof File ? file.name : next[slotIndex].fileName,
+          scale: 1,
+          offsetX: 0,
+          offsetY: 0,
+        };
+      });
+
+      return next;
+    });
+
+    const nextActiveIndex = Math.min(startIndex + items.length - 1, photoCount - 1);
+    if (nextActiveIndex >= 0) {
+      setActivePhotoSlotIndex(nextActiveIndex);
+      setPhotoSelection(Array.from({ length: items.length }, (_, offset) => startIndex + offset));
+    } else {
+      setActivePhotoSlotIndex(null);
+    }
   }
 
   function clampPhotoScale(value: number) {
@@ -598,35 +693,45 @@ export function ImageSheetGenerator() {
   }
 
   function stepSelectedPhotoScale(delta: number) {
-    if (activePhotoSlotIndex === null) {
+    const targets = selectedPhotoSlotIndices.filter((index) => photoSlots[index]?.dataUrl);
+    if (targets.length === 0) {
       return;
     }
 
-    const slot = photoSlots[activePhotoSlotIndex];
-    if (!slot?.dataUrl) {
-      return;
-    }
+    setPhotoSlots((current) =>
+      current.map((slot, slotIndex) => {
+        if (!targets.includes(slotIndex) || !slot.dataUrl) {
+          return slot;
+        }
 
-    updatePhotoSlotTransform(activePhotoSlotIndex, {
-      scale: clampPhotoScale(slot.scale + delta),
-    });
+        return {
+          ...slot,
+          scale: clampPhotoScale(slot.scale + delta),
+        };
+      }),
+    );
   }
 
   function resetSelectedPhotoTransform() {
-    if (activePhotoSlotIndex === null) {
+    const targets = selectedPhotoSlotIndices.filter((index) => photoSlots[index]?.dataUrl);
+    if (targets.length === 0) {
       return;
     }
 
-    const slot = photoSlots[activePhotoSlotIndex];
-    if (!slot?.dataUrl) {
-      return;
-    }
+    setPhotoSlots((current) =>
+      current.map((slot, slotIndex) => {
+        if (!targets.includes(slotIndex) || !slot.dataUrl) {
+          return slot;
+        }
 
-    updatePhotoSlotTransform(activePhotoSlotIndex, {
-      scale: 1,
-      offsetX: 0,
-      offsetY: 0,
-    });
+        return {
+          ...slot,
+          scale: 1,
+          offsetX: 0,
+          offsetY: 0,
+        };
+      }),
+    );
   }
 
   function clampOverlayScale(value: number) {
@@ -665,7 +770,7 @@ export function ImageSheetGenerator() {
 
   function openPhotoPicker(index: number) {
     pendingPhotoSlotIndexRef.current = index;
-    setActivePhotoSlotIndex(index);
+    selectActivePhotoSlot(index);
     photoInputRef.current?.click();
   }
 
@@ -676,13 +781,14 @@ export function ImageSheetGenerator() {
   }
 
   function clearSelectedPhoto() {
-    if (activePhotoSlotIndex === null) {
+    const targets = selectedPhotoSlotIndices.filter((index) => photoSlots[index]);
+    if (targets.length === 0) {
       return;
     }
 
     setPhotoSlots((current) =>
       current.map((slot, index) =>
-        index === activePhotoSlotIndex
+        targets.includes(index)
           ? { ...slot, dataUrl: null, fileName: null, scale: 1, offsetX: 0, offsetY: 0 }
           : slot,
       ),
@@ -690,10 +796,12 @@ export function ImageSheetGenerator() {
   }
 
   function handlePhotoInputChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     const index = pendingPhotoSlotIndexRef.current ?? activePhotoSlotIndex ?? 0;
-    if (file) {
-      void setPhotoSlotFromFile(index, file);
+    if (files.length === 1) {
+      void setPhotoSlotFromFile(index, files[0]);
+    } else if (files.length > 1) {
+      void setPhotoSlotsFromFiles(index, files);
     }
 
     event.target.value = "";
@@ -747,7 +855,20 @@ export function ImageSheetGenerator() {
 
     const slotIndex = getPhotoSlotIndexAtPoint(point.x, point.y);
     if (slotIndex !== null) {
-      setActivePhotoSlotIndex(slotIndex);
+      if (event.shiftKey || event.metaKey || event.ctrlKey) {
+        setActivePhotoSlotIndex(slotIndex);
+      setSelectedPhotoSlotIndices((current) => {
+        const next = normalizeSelectedPhotoSlotIndices(current, photoCount, activePhotoSlotIndex);
+        if (next.includes(slotIndex)) {
+          const filtered = next.filter((index) => index !== slotIndex);
+          return filtered.length > 0 ? filtered : [slotIndex];
+        }
+
+        return [...next, slotIndex];
+      });
+      } else {
+        selectActivePhotoSlot(slotIndex);
+      }
       if (!photoSlots[slotIndex]?.dataUrl) {
         openPhotoPicker(slotIndex);
       }
@@ -782,7 +903,7 @@ export function ImageSheetGenerator() {
     }
 
     const slot = photoSlots[slotIndex];
-    setActivePhotoSlotIndex(slotIndex);
+    selectActivePhotoSlot(slotIndex);
     if (!slot?.dataUrl) {
       return;
     }
@@ -854,7 +975,7 @@ export function ImageSheetGenerator() {
 
       setProgressPhase("complete");
       setProgressValue(100);
-      setStatusMessage(`${generation.fileName} をダウンロードしました。`);
+      setStatusMessage(`${generation.fileName} downloaded.`);
     } catch (error) {
       if (renderingTimer) {
         window.clearInterval(renderingTimer);
@@ -869,12 +990,12 @@ export function ImageSheetGenerator() {
 
   async function generatePhotoVideos() {
     if (!photoAssets) {
-      setErrorMessage("写真アセットの読み込みが終わっていません。");
+      setErrorMessage("写真アセットがまだ準備できていません。");
       return;
     }
 
     if (photoNeedsManualAnchors && photoAnchors.some((anchor) => anchor === null)) {
-      setErrorMessage("アンカーをすべて設定してください。");
+      setErrorMessage("Please set all anchors before exporting.");
       return;
     }
 
@@ -898,6 +1019,7 @@ export function ImageSheetGenerator() {
 
       drawPhotoPreview(exportContext, photoAssets, {
         photoCount,
+        photoRowCount,
         photoSlots,
         symbolColumnCount,
         symbolColumnNotes,
@@ -909,6 +1031,7 @@ export function ImageSheetGenerator() {
         labelOffsetX: photoLabelOffsetX,
         labelOffsetY: photoLabelOffsetY,
         showAnchors: false,
+        fillBackground: false,
       });
       const previewBlob = await canvasToBlob(exportCanvas, "image/png");
       zip.file("0_preview.png", previewBlob);
@@ -935,6 +1058,7 @@ export function ImageSheetGenerator() {
           const partialSymbols = limitAnimatedSymbols(baseSymbolSequence, visibleCount);
           drawPhotoPreview(exportContext, photoAssets, {
             photoCount,
+            photoRowCount,
             photoSlots,
             symbolColumnCount,
             symbolColumnNotes,
@@ -947,6 +1071,7 @@ export function ImageSheetGenerator() {
             labelOffsetY: photoLabelOffsetY,
             symbolsToShow: partialSymbols,
             showAnchors: false,
+            fillBackground: false,
           });
           const frameBlob = await canvasToBlob(exportCanvas, "image/png");
           const bytes = new Uint8Array(await frameBlob.arrayBuffer());
@@ -955,7 +1080,7 @@ export function ImageSheetGenerator() {
 
         await ffmpeg.writeFile(`${dir}/audio.wav`, new Uint8Array(await audioBlob.arrayBuffer()));
 
-        const outputFile = `${dir}/output.mp4`;
+        const outputFile = `${dir}/output.mov`;
         const exitCode = await ffmpeg.exec([
           "-framerate",
           String(PHOTO_EXPORT_FPS),
@@ -964,9 +1089,9 @@ export function ImageSheetGenerator() {
           "-i",
           `${dir}/audio.wav`,
           "-c:v",
-          "libx264",
+          "png",
           "-pix_fmt",
-          "yuv420p",
+          "rgba",
           "-c:a",
           "aac",
           "-shortest",
@@ -974,11 +1099,11 @@ export function ImageSheetGenerator() {
         ]);
 
         if (exitCode !== 0) {
-          throw new Error(`MP4 generation failed for row ${rowNumber}.`);
+          throw new Error(`MOV generation failed for row ${rowNumber}.`);
         }
 
-        const mp4Bytes = await ffmpeg.readFile(outputFile);
-        zip.file(buildMp4FileName(rowNumber, row.text), new Uint8Array(mp4Bytes as Uint8Array));
+        const movBytes = await ffmpeg.readFile(outputFile);
+        zip.file(buildMovFileName(rowNumber, row.text), new Uint8Array(movBytes as Uint8Array));
         await cleanupDirectory(ffmpeg, dir);
 
         setProgressValue(Math.min(92, Math.round(18 + ((rowIndex + 1) / rows.length) * 70)));
@@ -991,11 +1116,11 @@ export function ImageSheetGenerator() {
       downloadBlob(zipBlob, zipName);
       setProgressPhase("complete");
       setProgressValue(100);
-      setStatusMessage(`${zipName} をダウンロードしました。`);
+      setStatusMessage(`${zipName} downloaded.`);
     } catch (error) {
       setProgressPhase("error");
       setProgressValue(100);
-      setErrorMessage(error instanceof Error ? error.message : "MP4 generation failed.");
+      setErrorMessage(error instanceof Error ? error.message : "MOV generation failed.");
     } finally {
       setIsGenerating(false);
     }
@@ -1122,7 +1247,7 @@ export function ImageSheetGenerator() {
   }
 
   function getPhotoSlotIndexAtPoint(x: number, y: number) {
-    const layouts = computePhotoSlotLayouts(photoCount);
+    const layouts = computePhotoSlotLayouts(photoCount, photoRowCount);
     const match = layouts.find(
       (layout) =>
         x >= layout.x &&
@@ -1133,15 +1258,16 @@ export function ImageSheetGenerator() {
     return match?.index ?? null;
   }
 
-  const addRowColspan = 6 + symbolColumnCount;
-  const denomStepDownDisabled = denominatorMode <= DENOMINATOR_MIN;
-  const denomStepUpDisabled = denominatorMode >= DENOMINATOR_MAX;
-  const symbolStepDownDisabled = symbolColumnCount <= SYMBOL_COLUMN_MIN;
-  const symbolStepUpDisabled = symbolColumnCount >= SYMBOL_COLUMN_MAX;
+  const addRowColspan = 7;
+  const selectedPhotoCount = selectedPhotoSlotIndices.length;
   const selectedPhotoName =
-    activePhotoSlotIndex !== null ? photoSlots[activePhotoSlotIndex]?.fileName ?? null : null;
+    selectedPhotoCount === 1 && activePhotoSlotIndex !== null
+      ? photoSlots[activePhotoSlotIndex]?.fileName ?? null
+      : null;
   const selectedPhotoScale =
-    activePhotoSlotIndex !== null ? photoSlots[activePhotoSlotIndex]?.scale ?? 1 : 1;
+    selectedPhotoCount === 1 && activePhotoSlotIndex !== null ? photoSlots[activePhotoSlotIndex]?.scale ?? 1 : 1;
+  const hasSelectedPhotoData = selectedPhotoSlotIndices.some((index) => photoSlots[index]?.dataUrl);
+  const photoSelectionLabel = selectedPhotoName ? `${Math.round(selectedPhotoScale * 100)}%` : "Controls";
   const isPhotoDragging = photoDragStateRef.current !== null;
 
   return (
@@ -1202,7 +1328,7 @@ export function ImageSheetGenerator() {
                     <path d="M12 4v10m0 0-4-4m4 4 4-4" />
                     <path d="M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
                   </svg>
-                  {activePreviewTab === "photo" ? "MP4生成" : "ZIP生成"}
+                  {activePreviewTab === "photo" ? "MOV生成" : "ZIP生成"}
                 </>
               )}
             </button>
@@ -1216,83 +1342,81 @@ export function ImageSheetGenerator() {
         <div className={styles.content}>
           <div className={styles.tablePane}>
             <div className={styles.tableScroll}>
-              <table className={styles.table}>
+              <table ref={tableRef} className={styles.table}>
+                <colgroup>
+                  <col style={{ width: "36px" }} />
+                  <col style={{ width: "180px" }} />
+                  <col />
+                  <col style={{ width: "80px" }} />
+                  <col style={{ width: "80px" }} />
+                  <col style={{ width: "80px" }} />
+                  <col style={{ width: "32px" }} />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th rowSpan={2} style={{ width: 34, textAlign: "center" }}>
+                    <th className={styles.indexColumn} style={{ textAlign: "center" }}>
                       #
                     </th>
-                    <th rowSpan={2}>問題の内容</th>
-                    <th colSpan={symbolColumnCount} style={{ textAlign: "center" }}>
-                      <div className={styles.headerStepper}>
-                        <span>記号</span>
-                        <button
-                          type="button"
-                          className={styles.stepBtn}
-                          onClick={() => stepSymbolColumnCount(-1)}
-                          disabled={symbolStepDownDisabled}
+                    <th className={styles.textColumn}>本文</th>
+                    <th className={styles.symbolAreaColumn}>
+                      <div className={styles.symbolAreaHeader}>
+                        <div className={styles.headerStepper}>
+                          <span>記号</span>
+                          <NumberStepper
+                            value={symbolColumnCount}
+                            min={SYMBOL_COLUMN_MIN}
+                            onChange={updateSymbolColumnCount}
+                            ariaLabel="記号"
+                            inputClassName={styles.countInput}
+                          />
+                        </div>
+                        <SymbolStrip
+                          className={styles.symbolStripViewport}
+                          onScroll={(event) => {
+                            applySymbolStripScrollLeft(event.currentTarget.scrollLeft);
+                          }}
                         >
-                          −
-                        </button>
-                        <span className={styles.stepValue}>{symbolColumnCount}</span>
-                        <button
-                          type="button"
-                          className={styles.stepBtn}
-                          onClick={() => stepSymbolColumnCount(1)}
-                          disabled={symbolStepUpDisabled}
-                        >
-                          ＋
-                        </button>
+                          <div className={styles.symbolStripGrid}>
+                            {symbolColumnNotes.map((note, index) => (
+                              <div key={index} className={styles.symbolStripCell}>
+                                <input
+                                  className={styles.symbolNoteInput}
+                                  type="text"
+                                  value={note}
+                                  onChange={(event) => updateSymbolColumnNote(index, event.target.value)}
+                                  placeholder="メモ"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </SymbolStrip>
                       </div>
                     </th>
-                    <th rowSpan={2} style={{ textAlign: "center" }}>
-                      サイズ
+                    <th className={styles.valueColumn} style={{ textAlign: "center" }}>
+                      記号
                     </th>
-                    <th rowSpan={2} style={{ textAlign: "center" }}>
+                    <th className={styles.valueColumn} style={{ textAlign: "center" }}>
                       分子
                     </th>
-                    <th rowSpan={2} style={{ textAlign: "center" }}>
+                    <th className={styles.valueColumn} style={{ textAlign: "center" }}>
                       <div className={styles.headerStepper}>
                         <span>分母</span>
-                        <button
-                          type="button"
-                          className={styles.stepBtn}
-                          onClick={() => stepDenominatorMode(-1)}
-                          disabled={denomStepDownDisabled}
-                        >
-                          −
-                        </button>
-                        <span className={styles.stepValue}>{denominatorMode}</span>
-                        <button
-                          type="button"
-                          className={styles.stepBtn}
-                          onClick={() => stepDenominatorMode(1)}
-                          disabled={denomStepUpDisabled}
-                        >
-                          ＋
-                        </button>
+                        <NumberStepper
+                          value={denominatorMode}
+                          min={DENOMINATOR_MIN}
+                          onChange={updateDenominatorMode}
+                          ariaLabel="分母"
+                          inputClassName={styles.countInput}
+                        />
                       </div>
                     </th>
-                    <th rowSpan={2} style={{ width: 32 }} />
-                  </tr>
-                  <tr>
-                    {symbolColumnNotes.map((note, index) => (
-                      <th key={index} className={styles.symbolNoteHeader}>
-                        <input
-                          className={styles.symbolNoteInput}
-                          type="text"
-                          value={note}
-                          onChange={(event) => updateSymbolColumnNote(index, event.target.value)}
-                          placeholder="メモ"
-                        />
-                      </th>
-                    ))}
+                    <th className={styles.actionColumn} />
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row, rowIndex) => (
                     <tr key={row.id} className={styles.dataRow} data-active={safePreviewIndex === rowIndex}>
-                      <td style={{ textAlign: "center" }}>
+                      <td className={styles.indexColumn} style={{ textAlign: "center" }}>
                         <button
                           type="button"
                           className={styles.indexButton}
@@ -1301,7 +1425,7 @@ export function ImageSheetGenerator() {
                           {rowIndex + 1}
                         </button>
                       </td>
-                      <td>
+                      <td className={styles.textColumn}>
                         <textarea
                           className={styles.textCell}
                           value={row.text}
@@ -1314,46 +1438,57 @@ export function ImageSheetGenerator() {
                           data-gramm="false"
                         />
                       </td>
-                      {row.symbols.map((symbol, symbolIndex) => (
-                        <td key={`${row.id}-${symbolIndex}`}>
-                          <select
-                            className={styles.symbolSelect}
-                            value={symbol}
-                            style={{ color: SYMBOL_COLORS[symbol] }}
-                            onChange={(event) =>
-                              updateRowSymbol(row.id, symbolIndex, event.target.value as SymbolOption)
-                            }
-                          >
-                            {SYMBOL_OPTIONS.map((option) => (
-                              <option key={option} value={option}>
-                                {SYMBOL_LABELS[option]}
-                              </option>
+                      <td className={styles.symbolAreaColumn}>
+                        <SymbolStrip
+                          className={styles.symbolStripClipped}
+                          mirrorScroll
+                        >
+                          <div className={styles.symbolStripGrid}>
+                            {row.symbols.map((symbol, symbolIndex) => (
+                              <div key={`${row.id}-${symbolIndex}`} className={styles.symbolStripCell}>
+                                <select
+                                  className={styles.symbolSelect}
+                                  value={symbol}
+                                  style={{ color: SYMBOL_COLORS[symbol] }}
+                                  onChange={(event) =>
+                                    updateRowSymbol(row.id, symbolIndex, event.target.value as SymbolOption)
+                                  }
+                                >
+                                  {SYMBOL_OPTIONS.map((option) => (
+                                    <option key={option} value={option}>
+                                      {SYMBOL_LABELS[option]}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
                             ))}
-                          </select>
-                        </td>
-                      ))}
-                      <td>
-                        <input
-                          className={styles.numberInput}
-                          type="number"
-                          min={1}
+                          </div>
+                        </SymbolStrip>
+                      </td>
+                      <td className={styles.valueColumn}>
+                        <NumberStepper
                           value={row.fontSize}
-                          onChange={(event) => updateRowFontSize(row.id, event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className={styles.numberInput}
-                          type="number"
                           min={1}
-                          value={row.numerator}
-                          onChange={(event) => updateRowNumber(row.id, "numerator", event.target.value)}
+                          onChange={(value) => updateRowFontSize(row.id, String(value))}
+                          ariaLabel={`行 ${rowIndex + 1} の文字サイズ`}
+                          size="compact"
+                          inputClassName={styles.numericStepperInputCompact}
                         />
                       </td>
-                      <td>
+                      <td className={styles.valueColumn}>
+                        <NumberStepper
+                          value={row.numerator}
+                          min={1}
+                          onChange={(value) => updateRowNumber(row.id, "numerator", String(value))}
+                          ariaLabel={`行 ${rowIndex + 1} の分子`}
+                          size="compact"
+                          inputClassName={styles.numericStepperInputCompact}
+                        />
+                      </td>
+                      <td className={styles.valueColumn}>
                         <input className={styles.numberInput} type="number" value={row.denominator} readOnly />
                       </td>
-                      <td style={{ textAlign: "center" }}>
+                      <td className={styles.actionColumn} style={{ textAlign: "center" }}>
                         <button
                           type="button"
                           className={styles.deleteButton}
@@ -1399,7 +1534,13 @@ export function ImageSheetGenerator() {
 
           <div className={styles.verticalDivider} />
 
-          <div ref={previewPanelRef} className={styles.previewPane} tabIndex={0} aria-label="Preview panel">
+          <div
+            ref={previewPanelRef}
+            className={styles.previewPane}
+            data-photo-tab={activePreviewTab === "photo"}
+            tabIndex={0}
+            aria-label="Preview panel"
+          >
             <div className={styles.previewTabs}>
               <button
                 type="button"
@@ -1476,219 +1617,237 @@ export function ImageSheetGenerator() {
             {activePreviewTab === "photo" && (
               <>
                 <div
-                  className={styles.photoCanvasShell}
+                  className={styles.photoPane}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => void handlePhotoDrop(event)}
                 >
-                  <div className={styles.photoFloatingPanel} data-collapsed={isPhotoPanelCollapsed}>
-                    <div className={styles.photoFloatingHeader}>
-                      <span className={styles.photoLabel}>
-                        {selectedPhotoName ? `${Math.round(selectedPhotoScale * 100)}%` : "Controls"}
-                      </span>
-                      <button
-                        type="button"
-                        className={styles.ghostButton}
-                        onClick={() => setIsPhotoPanelCollapsed((current) => !current)}
-                        aria-expanded={!isPhotoPanelCollapsed}
-                      >
-                        {isPhotoPanelCollapsed ? "Open" : "Close"}
-                      </button>
-                    </div>
-                    {!isPhotoPanelCollapsed && (
-                      <>
-                        <div className={styles.photoToolbarGroup}>
-                          <span className={styles.photoLabel}>Photos</span>
-                          <button
-                            type="button"
-                            className={styles.stepBtn}
-                            onClick={() => updatePhotoCount(photoCount - 1)}
-                            disabled={photoCount <= PHOTO_COUNT_MIN}
-                          >
-                            −
-                          </button>
-                          <span className={styles.stepValue}>{photoCount}</span>
-                          <button
-                            type="button"
-                            className={styles.stepBtn}
-                            onClick={() => updatePhotoCount(photoCount + 1)}
-                            disabled={photoCount >= PHOTO_COUNT_MAX}
-                          >
-                            ＋
-                          </button>
-                        </div>
-                        <div className={styles.photoToolbarGroup}>
-                          {photoNeedsManualAnchors && (
-                            <button type="button" className={styles.ghostButton} onClick={startAnchorPlacement}>
-                              アンカーを設定
+                  <div className={styles.photoControlRail}>
+                    <div className={styles.photoFloatingPanel} data-collapsed={isPhotoPanelCollapsed}>
+                      <div className={styles.photoFloatingHeader}>
+                        <span className={styles.photoLabel}>{photoSelectionLabel}</span>
+                        <button
+                          type="button"
+                          className={styles.ghostButton}
+                          onClick={() => setIsPhotoPanelCollapsed((current) => !current)}
+                          aria-expanded={!isPhotoPanelCollapsed}
+                        >
+                          {isPhotoPanelCollapsed ? "開く" : "閉じる"}
+                        </button>
+                      </div>
+                      {!isPhotoPanelCollapsed && (
+                        <>
+                          <div className={styles.photoToolbarGroup}>
+                            <span className={styles.photoLabel}>写真数</span>
+                            <NumberStepper
+                              value={photoCount}
+                              min={PHOTO_COUNT_MIN}
+                              onChange={updatePhotoCount}
+                              ariaLabel="写真数"
+                              size="compact"
+                              inputClassName={styles.countInput}
+                            />
+                          </div>
+                          <div className={styles.photoToolbarGroup}>
+                            <span className={styles.photoLabel}>行数</span>
+                            <NumberStepper
+                              value={photoRowCount}
+                              min={PHOTO_ROW_COUNT_MIN}
+                              onChange={updatePhotoRowCount}
+                              ariaLabel="行数"
+                              size="compact"
+                              inputClassName={styles.countInput}
+                            />
+                          </div>
+                          <div className={styles.photoToolbarGroup}>
+                            <button type="button" className={styles.ghostButton} onClick={selectAllPhotoSlots}>
+                              すべて選択
                             </button>
-                          )}
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => openPhotoPicker(activePhotoSlotIndex ?? 0)}
-                          >
-                            画像を選択
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={clearSelectedPhoto}
-                            disabled={activePhotoSlotIndex === null}
-                          >
-                            クリア
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => stepSelectedPhotoScale(-PHOTO_SCALE_STEP)}
-                            disabled={activePhotoSlotIndex === null || !selectedPhotoName}
-                          >
-                            縮小
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => stepSelectedPhotoScale(PHOTO_SCALE_STEP)}
-                            disabled={activePhotoSlotIndex === null || !selectedPhotoName}
-                          >
-                            拡大
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={resetSelectedPhotoTransform}
-                            disabled={activePhotoSlotIndex === null || !selectedPhotoName}
-                          >
-                            位置リセット
-                          </button>
-                        </div>
-                        <div className={styles.photoToolbarGroup}>
-                          <span className={styles.photoLabel}>Marks</span>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => stepPhotoSymbolScale(-OVERLAY_SCALE_STEP)}
-                          >
-                            -
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => stepPhotoSymbolScale(OVERLAY_SCALE_STEP)}
-                          >
-                            +
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoSymbols(-OVERLAY_OFFSET_STEP, 0)}
-                          >
-                            L
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoSymbols(OVERLAY_OFFSET_STEP, 0)}
-                          >
-                            R
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoSymbols(0, -OVERLAY_OFFSET_STEP)}
-                          >
-                            U
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoSymbols(0, OVERLAY_OFFSET_STEP)}
-                          >
-                            D
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={resetPhotoSymbols}
-                          >
-                            0
-                          </button>
-                        </div>
-                        <div className={styles.photoToolbarGroup}>
-                          <span className={styles.photoLabel}>Labels</span>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => stepPhotoLabelScale(-OVERLAY_SCALE_STEP)}
-                          >
-                            -
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => stepPhotoLabelScale(OVERLAY_SCALE_STEP)}
-                          >
-                            +
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoLabels(-OVERLAY_OFFSET_STEP, 0)}
-                          >
-                            L
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoLabels(OVERLAY_OFFSET_STEP, 0)}
-                          >
-                            R
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoLabels(0, -OVERLAY_OFFSET_STEP)}
-                          >
-                            U
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={() => movePhotoLabels(0, OVERLAY_OFFSET_STEP)}
-                          >
-                            D
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.ghostButton}
-                            onClick={resetPhotoLabels}
-                          >
-                            0
-                          </button>
-                        </div>
-                      </>
-                    )}
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={resetToSinglePhotoSelection}
+                              disabled={selectedPhotoCount <= 1}
+                            >
+                              1枚選択に戻す
+                            </button>
+                          </div>
+                          <div className={styles.photoToolbarGroup}>
+                            {photoNeedsManualAnchors && (
+                              <button type="button" className={styles.ghostButton} onClick={startAnchorPlacement}>
+                                アンカーを設定
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => openPhotoPicker(activePhotoSlotIndex ?? 0)}
+                            >
+                              画像を選択
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={clearSelectedPhoto}
+                              disabled={selectedPhotoCount === 0}
+                            >
+                              クリア
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => stepSelectedPhotoScale(-PHOTO_SCALE_STEP)}
+                              disabled={!hasSelectedPhotoData}
+                            >
+                              縮小
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => stepSelectedPhotoScale(PHOTO_SCALE_STEP)}
+                              disabled={!hasSelectedPhotoData}
+                            >
+                              拡大
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={resetSelectedPhotoTransform}
+                              disabled={!hasSelectedPhotoData}
+                            >
+                              位置をリセット
+                            </button>
+                          </div>
+                          <div className={styles.photoToolbarGroup}>
+                            <span className={styles.photoLabel}>Marks</span>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => stepPhotoSymbolScale(-OVERLAY_SCALE_STEP)}
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => stepPhotoSymbolScale(OVERLAY_SCALE_STEP)}
+                            >
+                              +
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoSymbols(-OVERLAY_OFFSET_STEP, 0)}
+                            >
+                              左
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoSymbols(OVERLAY_OFFSET_STEP, 0)}
+                            >
+                              右
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoSymbols(0, -OVERLAY_OFFSET_STEP)}
+                            >
+                              上
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoSymbols(0, OVERLAY_OFFSET_STEP)}
+                            >
+                              下
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={resetPhotoSymbols}
+                            >
+                              0
+                            </button>
+                          </div>
+                          <div className={styles.photoToolbarGroup}>
+                            <span className={styles.photoLabel}>Labels</span>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => stepPhotoLabelScale(-OVERLAY_SCALE_STEP)}
+                            >
+                              -
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => stepPhotoLabelScale(OVERLAY_SCALE_STEP)}
+                            >
+                              +
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoLabels(-OVERLAY_OFFSET_STEP, 0)}
+                            >
+                              左
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoLabels(OVERLAY_OFFSET_STEP, 0)}
+                            >
+                              右
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoLabels(0, -OVERLAY_OFFSET_STEP)}
+                            >
+                              上
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={() => movePhotoLabels(0, OVERLAY_OFFSET_STEP)}
+                            >
+                              下
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.ghostButton}
+                              onClick={resetPhotoLabels}
+                            >
+                              0
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <canvas
-                    ref={photoCanvasRef}
-                    className={styles.photoCanvas}
-                    data-dragging={isPhotoDragging}
-                    width={PHOTO_CANVAS_WIDTH}
-                    height={PHOTO_CANVAS_HEIGHT}
-                    style={{ aspectRatio: String(PHOTO_CANVAS_ASPECT_RATIO) }}
-                    onClick={handlePhotoCanvasClick}
-                    onDoubleClick={handlePhotoCanvasDoubleClick}
-                    onPointerDown={handlePhotoCanvasPointerDown}
-                    onPointerMove={handlePhotoCanvasPointerMove}
-                    onPointerUp={handlePhotoCanvasPointerEnd}
-                    onPointerCancel={handlePhotoCanvasPointerEnd}
-                  />
+                  <div className={styles.photoCanvasShell}>
+                    <canvas
+                      ref={photoCanvasRef}
+                      className={styles.photoCanvas}
+                      data-dragging={isPhotoDragging}
+                      width={PHOTO_CANVAS_WIDTH}
+                      height={PHOTO_CANVAS_HEIGHT}
+                      style={{ aspectRatio: String(PHOTO_CANVAS_ASPECT_RATIO) }}
+                      onClick={handlePhotoCanvasClick}
+                      onDoubleClick={handlePhotoCanvasDoubleClick}
+                      onPointerDown={handlePhotoCanvasPointerDown}
+                      onPointerMove={handlePhotoCanvasPointerMove}
+                      onPointerUp={handlePhotoCanvasPointerEnd}
+                      onPointerCancel={handlePhotoCanvasPointerEnd}
+                    />
+                  </div>
                 </div>
                 <input
                   ref={photoInputRef}
                   className={styles.hiddenInput}
                   type="file"
                   accept="image/*"
+                  multiple
                   onChange={handlePhotoInputChange}
                 />
               </>
@@ -1731,6 +1890,119 @@ export function ImageSheetGenerator() {
         </div>
       )}
     </main>
+  );
+}
+
+type NumberStepperProps = {
+  value: number;
+  onChange: (value: number) => void;
+  ariaLabel: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  size?: "regular" | "compact";
+  inputClassName?: string;
+};
+
+function NumberStepper({
+  value,
+  onChange,
+  ariaLabel,
+  min = Number.NEGATIVE_INFINITY,
+  max = Number.POSITIVE_INFINITY,
+  step = 1,
+  size = "regular",
+  inputClassName,
+}: NumberStepperProps) {
+  const [draft, setDraft] = useState(String(value));
+  const [isFocused, setIsFocused] = useState(false);
+  const displayValue = isFocused ? draft : String(value);
+
+  function clamp(nextValue: number) {
+    return Math.max(min, Math.min(max, Math.trunc(nextValue)));
+  }
+
+  function commit(rawValue: string) {
+    setDraft(rawValue);
+    if (rawValue.trim().length === 0) {
+      return;
+    }
+
+    const parsed = Number(rawValue);
+    if (Number.isFinite(parsed)) {
+      onChange(clamp(parsed));
+    }
+  }
+
+  function handleBlur() {
+    setIsFocused(false);
+    if (draft.trim().length === 0) {
+      setDraft(String(value));
+      return;
+    }
+
+    const parsed = Number(draft);
+    if (Number.isFinite(parsed)) {
+      onChange(clamp(parsed));
+      return;
+    }
+
+    setDraft(String(value));
+  }
+
+  function stepBy(delta: number) {
+    onChange(clamp(value + delta));
+  }
+
+  return (
+    <span className={styles.numericStepper} data-size={size}>
+      <button
+        type="button"
+        className={size === "compact" ? styles.numericStepperButtonCompact : styles.numericStepperButton}
+        onClick={() => stepBy(-step)}
+        aria-label={`${ariaLabel}を減らす`}
+      >
+        -
+      </button>
+      <input
+        className={inputClassName ?? styles.numericStepperInput}
+        type="number"
+        inputMode="numeric"
+        value={displayValue}
+        onFocus={() => {
+          setDraft(String(value));
+          setIsFocused(true);
+        }}
+        onChange={(event) => commit(event.target.value)}
+        onBlur={handleBlur}
+        aria-label={ariaLabel}
+      />
+      <button
+        type="button"
+        className={size === "compact" ? styles.numericStepperButtonCompact : styles.numericStepperButton}
+        onClick={() => stepBy(step)}
+        aria-label={`${ariaLabel}を増やす`}
+      >
+        +
+      </button>
+    </span>
+  );
+}
+
+type SymbolStripProps = {
+  children: ReactNode;
+  className?: string;
+  mirrorScroll?: boolean;
+  onScroll?: (event: UIEvent<HTMLDivElement>) => void;
+};
+
+function SymbolStrip({ children, className, mirrorScroll = false, onScroll }: SymbolStripProps) {
+  return (
+    <div className={className} onScroll={onScroll}>
+      <div className={mirrorScroll ? styles.symbolStripTrackMirror : styles.symbolStripTrack}>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -1839,3 +2111,8 @@ function writeAscii(view: DataView, offset: number, value: string) {
     view.setUint8(offset + index, value.charCodeAt(index));
   }
 }
+
+
+
+
+
