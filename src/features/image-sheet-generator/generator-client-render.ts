@@ -400,7 +400,7 @@ function drawSymbols(
       }
       case "?": {
         context.fillStyle = QUESTION_PURPLE;
-        context.font = `700 ${Math.round(SYMBOL_WIDTH * 0.95)}px ${SANS_FONT}`;
+        context.font = `700 ${Math.round(SYMBOL_WIDTH * 1.2)}px ${SANS_FONT}`;
         context.textAlign = "center";
         context.textBaseline = "middle";
         context.fillText("?", left + SYMBOL_WIDTH / 2, SYMBOL_WIDTH / 2 + 12);
