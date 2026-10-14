@@ -84,7 +84,7 @@ export async function renderClientPreviewBlob(payload: GeneratorPayload, preview
   return canvasToBlob(canvas);
 }
 
-export async function renderClientZipBlob(payload: GeneratorPayload) {
+export async function renderClientZipBlob(payload: GeneratorPayload, saveJson?: string) {
   const rows = payload.rows.map(normalizeRow);
   const outputs = await renderAllModeOutputs(payload.title, rows, payload.denominatorMode);
   const zip = new JSZip();
@@ -92,6 +92,7 @@ export async function renderClientZipBlob(payload: GeneratorPayload) {
   for (const output of outputs) {
     zip.file(output.fileName, output.blob);
   }
+  zip.file("generator-state.json", saveJson ?? JSON.stringify(payload, null, 2));
 
   return {
     blob: await zip.generateAsync({ type: "blob" }),
@@ -232,6 +233,7 @@ function renderCumulativeTextPanels(rows: NormalizedRow[]) {
 }
 
 function renderTextPanelCanvas(text: string, symbols: NormalizedRow["symbols"], fontSize: number) {
+  const hasAllCircle = symbols.includes("all-circle");
   const visibleSymbols = symbols.filter((symbol): symbol is Exclude<SymbolOption, "-"> => symbol !== "-");
   const lines = text.length > 0 ? text.split("\n") : [""];
   const normalizedFontSize = Math.max(1, Math.trunc(fontSize));
@@ -249,7 +251,7 @@ function renderTextPanelCanvas(text: string, symbols: NormalizedRow["symbols"], 
   context.strokeRect(0, 0, canvas.width, canvas.height);
 
   drawTextLines(context, lines, metrics, normalizedFontSize);
-  drawSymbols(context, visibleSymbols, textHeight);
+  drawSymbols(context, visibleSymbols, textHeight, hasAllCircle);
 
   return canvas;
 }
@@ -343,7 +345,19 @@ function drawSymbols(
   context: CanvasRenderingContext2D,
   symbols: Array<Exclude<SymbolOption, "-">>,
   textHeight: number,
+  hasAllCircle: boolean,
 ) {
+  if (hasAllCircle) {
+    context.save();
+    context.fillStyle = BLUE;
+    context.font = `700 ${Math.round(SYMBOL_WIDTH * 0.78)}px ${SANS_FONT}`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText("全部〇", CANVAS_WIDTH / 2, textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH / 2);
+    context.restore();
+    return;
+  }
+
   if (symbols.length === 0) {
     return;
   }

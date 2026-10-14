@@ -26,7 +26,9 @@ import {
   getPreviewCount,
   getZipName,
   INITIAL_SYMBOL_COLUMN_COUNT,
+  normalizeFontSize,
   normalizeSymbolColumnCount,
+  sanitizeFileName,
   SYMBOL_LABELS,
   SYMBOL_OPTIONS,
   type DenominatorMode,
@@ -104,6 +106,7 @@ const SYMBOL_COLORS: Record<SymbolOption, string> = {
   cross: "#E23D2E",
   triangle: "#F28C28",
   "?": "#9e00fe",
+  "all-circle": "#2166F3",
 };
 
 const HELP_TEXT = [
@@ -163,6 +166,7 @@ export function ImageSheetGenerator() {
   const [photoAssets, setPhotoAssets] = useState<PhotoRenderAssets | null>(null);
 
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const saveInputRef = useRef<HTMLInputElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const photoCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -464,8 +468,11 @@ export function ImageSheetGenerator() {
           return row;
         }
 
-        const symbols = [...row.symbols];
-        symbols[symbolIndex] = value;
+        const symbols = value === "all-circle"
+          ? row.symbols.map(() => "all-circle" as const)
+          : row.symbols.map((symbol, index) =>
+              symbol === "all-circle" ? (index === symbolIndex ? value : "-") : index === symbolIndex ? value : symbol,
+            );
         return { ...row, symbols };
       }),
     );
@@ -962,7 +969,7 @@ export function ImageSheetGenerator() {
         setProgressValue((current) => (current >= 72 ? current : current + 4));
       }, 180);
 
-      const generation = await renderClientZipBlob(previewPayload);
+      const generation = await renderClientZipBlob(previewPayload, createSaveJson());
 
       if (renderingTimer) {
         window.clearInterval(renderingTimer);
@@ -1016,6 +1023,7 @@ export function ImageSheetGenerator() {
       }
 
       const zip = new JSZip();
+      zip.file("generator-state.json", createSaveJson());
 
       drawPhotoPreview(exportContext, photoAssets, {
         photoCount,
@@ -1133,6 +1141,74 @@ export function ImageSheetGenerator() {
     }
 
     await generateImages();
+  }
+
+  function createSaveData() {
+    return {
+      version: 1,
+      title,
+      denominatorMode,
+      symbolColumnCount,
+      symbolColumnNotes,
+      rows,
+      photoCount,
+      photoRowCount,
+      photoSlots,
+      photoAnchors,
+      photoSymbolScale,
+      photoSymbolOffsetX,
+      photoSymbolOffsetY,
+      photoLabelScale,
+      photoLabelOffsetX,
+      photoLabelOffsetY,
+      isPhotoPanelCollapsed,
+      activePhotoSlotIndex,
+      selectedPhotoSlotIndices,
+      previewIndex,
+    };
+  }
+
+  function createSaveJson() {
+    return JSON.stringify(createSaveData(), null, 2);
+  }
+
+  function saveJsonFile() {
+    const baseName = sanitizeFileName(title) || "generator-state";
+    const blob = new Blob([createSaveJson()], { type: "application/json;charset=utf-8" });
+    downloadBlob(blob, `${baseName}.json`);
+    setStatusMessage(`${baseName}.json downloaded.`);
+  }
+
+  async function loadJsonFile(file: File) {
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const saved = parseSaveData(parsed);
+
+      setTitle(saved.title);
+      setDenominatorMode(saved.denominatorMode);
+      setSymbolColumnCount(saved.symbolColumnCount);
+      setSymbolColumnNotes(saved.symbolColumnNotes);
+      setRows(saved.rows);
+      setNextId(Math.max(saved.rows.length + 1, ...saved.rows.map((row) => row.id + 1)));
+      setPreviewIndex(clampPreviewIndex(saved.previewIndex, saved.rows.length));
+      setPhotoCount(saved.photoCount);
+      setPhotoRowCount(saved.photoRowCount);
+      setPhotoSlots(saved.photoSlots);
+      setPhotoAnchors(saved.photoAnchors);
+      setPhotoSymbolScale(saved.photoSymbolScale);
+      setPhotoSymbolOffsetX(saved.photoSymbolOffsetX);
+      setPhotoSymbolOffsetY(saved.photoSymbolOffsetY);
+      setPhotoLabelScale(saved.photoLabelScale);
+      setPhotoLabelOffsetX(saved.photoLabelOffsetX);
+      setPhotoLabelOffsetY(saved.photoLabelOffsetY);
+      setIsPhotoPanelCollapsed(saved.isPhotoPanelCollapsed);
+      setActivePhotoSlotIndex(saved.activePhotoSlotIndex);
+      setSelectedPhotoSlotIndices(saved.selectedPhotoSlotIndices);
+      setErrorMessage(null);
+      setStatusMessage(`${file.name} loaded.`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "JSONの読み込みに失敗しました。");
+    }
   }
 
   async function ensureFfmpegLoaded() {
@@ -1295,6 +1371,30 @@ export function ImageSheetGenerator() {
               />
             </div>
             <div className={styles.spacer} />
+            <button type="button" className={styles.ghostButton} onClick={saveJsonFile} disabled={isGenerating}>
+              JSON保存
+            </button>
+            <button
+              type="button"
+              className={styles.ghostButton}
+              onClick={() => saveInputRef.current?.click()}
+              disabled={isGenerating}
+            >
+              JSON読込
+            </button>
+            <input
+              ref={saveInputRef}
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) {
+                  void loadJsonFile(file);
+                }
+              }}
+            />
             <button
               ref={helpButtonRef}
               type="button"
@@ -2036,6 +2136,142 @@ function limitAnimatedSymbols(symbols: SymbolOption[], visibleSupportedCount: nu
   }
 
   return next;
+}
+
+type SavedGeneratorState = {
+  title: string;
+  denominatorMode: number;
+  symbolColumnCount: number;
+  symbolColumnNotes: string[];
+  rows: GeneratorRow[];
+  photoCount: number;
+  photoRowCount: number;
+  photoSlots: PhotoSlotData[];
+  photoAnchors: Array<Point | null>;
+  photoSymbolScale: number;
+  photoSymbolOffsetX: number;
+  photoSymbolOffsetY: number;
+  photoLabelScale: number;
+  photoLabelOffsetX: number;
+  photoLabelOffsetY: number;
+  isPhotoPanelCollapsed: boolean;
+  activePhotoSlotIndex: number | null;
+  selectedPhotoSlotIndices: number[];
+  previewIndex: number;
+};
+
+function parseSaveData(input: unknown): SavedGeneratorState {
+  if (!isRecord(input)) {
+    throw new Error("JSONの形式が正しくありません。");
+  }
+
+  const symbolColumnCount = normalizeSymbolColumnCount(input.symbolColumnCount);
+  const denominatorMode = positiveInteger(input.denominatorMode, 7);
+  const rawRows = Array.isArray(input.rows) ? input.rows : [];
+  if (rawRows.length === 0) {
+    throw new Error("JSONに行データがありません。");
+  }
+
+  const rows = rawRows.map((rawRow, index) => {
+    if (!isRecord(rawRow)) {
+      throw new Error("JSONの行データが正しくありません。");
+    }
+
+    const rawSymbols = Array.isArray(rawRow.symbols) ? rawRow.symbols : [];
+    const symbols = rawSymbols
+      .slice(0, symbolColumnCount)
+      .map((symbol) => (isSymbolOption(symbol) ? symbol : "-" as const));
+    while (symbols.length < symbolColumnCount) {
+      symbols.push("-");
+    }
+
+    return {
+      id: index + 1,
+      text: typeof rawRow.text === "string" ? rawRow.text : "",
+      symbols,
+      numerator: positiveInteger(rawRow.numerator, index + 1),
+      denominator: positiveInteger(rawRow.denominator, denominatorMode),
+      fontSize: normalizeFontSize(rawRow.fontSize),
+    };
+  });
+
+  const photoCount = clampPhotoCount(positiveInteger(input.photoCount, INITIAL_SYMBOL_COLUMN_COUNT));
+  const rawPhotoSlots = Array.isArray(input.photoSlots) ? input.photoSlots : [];
+  const photoSlots = normalizePhotoSlots(
+    rawPhotoSlots.filter(isRecord).map((slot, index) => ({
+      id: index + 1,
+      fileName: typeof slot.fileName === "string" ? slot.fileName : null,
+      dataUrl: typeof slot.dataUrl === "string" ? slot.dataUrl : null,
+      scale: positiveNumber(slot.scale, 1),
+      offsetX: finiteNumber(slot.offsetX, 0),
+      offsetY: finiteNumber(slot.offsetY, 0),
+    })),
+    photoCount,
+  );
+  const rawAnchors = Array.isArray(input.photoAnchors) ? input.photoAnchors : [];
+  const photoAnchors = normalizeAnchors(
+    rawAnchors.map((anchor) =>
+      isRecord(anchor) && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)
+        ? { x: Number(anchor.x), y: Number(anchor.y) }
+        : null,
+    ),
+    symbolColumnCount,
+  );
+  const activePhotoSlotIndex = input.activePhotoSlotIndex === null
+    ? null
+    : Math.max(0, Math.min(photoCount - 1, positiveInteger(input.activePhotoSlotIndex, 0)));
+  const selectedPhotoSlotIndices = normalizeSelectedPhotoSlotIndices(
+    Array.isArray(input.selectedPhotoSlotIndices)
+      ? input.selectedPhotoSlotIndices.filter((value): value is number => Number.isFinite(value)).map(Math.trunc)
+      : [],
+    photoCount,
+    activePhotoSlotIndex,
+  );
+
+  return {
+    title: typeof input.title === "string" ? input.title : "",
+    denominatorMode,
+    symbolColumnCount,
+    symbolColumnNotes: Array.from({ length: symbolColumnCount }, (_, index) => {
+      const notes = Array.isArray(input.symbolColumnNotes) ? input.symbolColumnNotes : [];
+      return typeof notes[index] === "string" ? notes[index] : "";
+    }),
+    rows,
+    photoCount,
+    photoRowCount: clampPhotoRowCount(positiveInteger(input.photoRowCount, PHOTO_ROW_COUNT_MIN), photoCount),
+    photoSlots,
+    photoAnchors,
+    photoSymbolScale: positiveNumber(input.photoSymbolScale, 1),
+    photoSymbolOffsetX: finiteNumber(input.photoSymbolOffsetX, 0),
+    photoSymbolOffsetY: finiteNumber(input.photoSymbolOffsetY, 0),
+    photoLabelScale: positiveNumber(input.photoLabelScale, 1),
+    photoLabelOffsetX: finiteNumber(input.photoLabelOffsetX, 0),
+    photoLabelOffsetY: finiteNumber(input.photoLabelOffsetY, 0),
+    isPhotoPanelCollapsed: input.isPhotoPanelCollapsed === true,
+    activePhotoSlotIndex,
+    selectedPhotoSlotIndices,
+    previewIndex: positiveInteger(input.previewIndex, 0),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isSymbolOption(value: unknown): value is SymbolOption {
+  return typeof value === "string" && SYMBOL_OPTIONS.includes(value as SymbolOption);
+}
+
+function finiteNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function positiveNumber(value: unknown, fallback: number) {
+  return Math.max(0.01, finiteNumber(value, fallback));
+}
+
+function positiveInteger(value: unknown, fallback: number) {
+  return Math.max(0, Math.trunc(finiteNumber(value, fallback)));
 }
 
 async function ensureDirectory(ffmpeg: FFmpeg, dir: string) {

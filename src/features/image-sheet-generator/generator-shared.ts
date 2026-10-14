@@ -1,4 +1,4 @@
-export const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?"] as const;
+export const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?", "all-circle"] as const;
 export const DEFAULT_DENOMINATOR = 7;
 export const MODE_OPTIONS = [
   {
@@ -40,6 +40,7 @@ export const SYMBOL_LABELS: Record<SymbolOption, string> = {
   cross: "✕",
   triangle: "△",
   "?": "?",
+  "all-circle": "全部〇",
 };
 
 export function createSymbols(count: SymbolColumnCount): SymbolOption[] {
