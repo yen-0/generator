@@ -6,7 +6,9 @@ import { canvasToBlob } from "./photo-panel";
 import {
   clampPreviewIndex,
   getZipName,
+  isWholeSymbolOption,
   normalizeText,
+  SYMBOL_LABELS,
   type DenominatorMode,
   type GeneratorPayload,
   type NormalizedRow,
@@ -233,7 +235,7 @@ function renderCumulativeTextPanels(rows: NormalizedRow[]) {
 }
 
 function renderTextPanelCanvas(text: string, symbols: NormalizedRow["symbols"], fontSize: number) {
-  const hasAllCircle = symbols.includes("all-circle");
+  const wholeSymbol = symbols.find(isWholeSymbolOption);
   const visibleSymbols = symbols.filter((symbol): symbol is Exclude<SymbolOption, "-"> => symbol !== "-");
   const lines = text.length > 0 ? text.split("\n") : [""];
   const normalizedFontSize = Math.max(1, Math.trunc(fontSize));
@@ -251,7 +253,7 @@ function renderTextPanelCanvas(text: string, symbols: NormalizedRow["symbols"], 
   context.strokeRect(0, 0, canvas.width, canvas.height);
 
   drawTextLines(context, lines, metrics, normalizedFontSize);
-  drawSymbols(context, visibleSymbols, textHeight, hasAllCircle);
+  drawSymbols(context, visibleSymbols, textHeight, wholeSymbol ? SYMBOL_LABELS[wholeSymbol] : null);
 
   return canvas;
 }
@@ -345,15 +347,15 @@ function drawSymbols(
   context: CanvasRenderingContext2D,
   symbols: Array<Exclude<SymbolOption, "-">>,
   textHeight: number,
-  hasAllCircle: boolean,
+  wholeSymbolText: string | null,
 ) {
-  if (hasAllCircle) {
+  if (wholeSymbolText) {
     context.save();
-    context.fillStyle = BLUE;
+    context.fillStyle = wholeSymbolText === "全部×" ? RED : wholeSymbolText === "全部△" ? ORANGE : BLUE;
     context.font = `700 ${Math.round(SYMBOL_WIDTH * 0.78)}px ${SANS_FONT}`;
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText("全部〇", CANVAS_WIDTH / 2, textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH / 2);
+    context.fillText(wholeSymbolText, CANVAS_WIDTH / 2, textHeight + SYMBOL_TOP_GAP + SYMBOL_WIDTH / 2);
     context.restore();
     return;
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { sanitizeFileName, type SymbolOption } from "./generator-shared";
+import { isWholeSymbolOption, sanitizeFileName, SYMBOL_LABELS, type SymbolOption } from "./generator-shared";
 
 export const PHOTO_CANVAS_WIDTH = 1080;
 export const PHOTO_CANVAS_HEIGHT = 1920;
@@ -210,7 +210,7 @@ export function drawPhotoPreview(
   }
   const layouts = computePhotoSlotLayouts(config.photoCount, config.photoRowCount);
   const visibleSymbols = (config.symbolsToShow ?? []).slice(0, config.symbolColumnCount);
-  const hasAllCircle = visibleSymbols.includes("all-circle");
+  const wholeSymbol = visibleSymbols.find(isWholeSymbolOption);
   const fallbackSlot: PhotoSlotData = {
     id: -1,
     fileName: null,
@@ -251,7 +251,7 @@ export function drawPhotoPreview(
   });
 
   visibleSymbols.forEach((symbol, index) => {
-    if (symbol === "all-circle") {
+    if (isWholeSymbolOption(symbol)) {
       return;
     }
     if (symbol === "-") {
@@ -266,17 +266,17 @@ export function drawPhotoPreview(
     drawSymbol(context, assets.symbolImages, symbol, anchor, config);
   });
 
-  if (hasAllCircle) {
+  if (wholeSymbol) {
     const anchors = config.anchors.filter((anchor): anchor is Point => anchor !== null);
     if (anchors.length > 0) {
       const centerX = anchors.reduce((sum, anchor) => sum + anchor.x, 0) / anchors.length;
       const centerY = anchors.reduce((sum, anchor) => sum + anchor.y, 0) / anchors.length;
       context.save();
-      context.fillStyle = "#2166F3";
+      context.fillStyle = wholeSymbol === "all-cross" ? "#E23D2E" : wholeSymbol === "all-triangle" ? "#F28C28" : "#2166F3";
       context.font = `700 ${Math.round(96 * Math.max(0.3, config.symbolScale ?? 1))}px ${LABEL_FONT_FAMILY}`;
       context.textAlign = "center";
       context.textBaseline = "middle";
-      context.fillText("全部〇", centerX + (config.symbolOffsetX ?? 0), centerY + (config.symbolOffsetY ?? 0));
+      context.fillText(SYMBOL_LABELS[wholeSymbol], centerX + (config.symbolOffsetX ?? 0), centerY + (config.symbolOffsetY ?? 0));
       context.restore();
     }
   }

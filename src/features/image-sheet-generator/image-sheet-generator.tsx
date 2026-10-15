@@ -29,6 +29,7 @@ import {
   normalizeFontSize,
   normalizeSymbolColumnCount,
   sanitizeFileName,
+  isWholeSymbolOption,
   SYMBOL_LABELS,
   SYMBOL_OPTIONS,
   type DenominatorMode,
@@ -107,6 +108,8 @@ const SYMBOL_COLORS: Record<SymbolOption, string> = {
   triangle: "#F28C28",
   "?": "#9e00fe",
   "all-circle": "#2166F3",
+  "all-cross": "#E23D2E",
+  "all-triangle": "#F28C28",
 };
 
 const HELP_TEXT = [
@@ -468,10 +471,10 @@ export function ImageSheetGenerator() {
           return row;
         }
 
-        const symbols = value === "all-circle"
-          ? row.symbols.map(() => "all-circle" as const)
+        const symbols = isWholeSymbolOption(value)
+          ? row.symbols.map(() => value)
           : row.symbols.map((symbol, index) =>
-              symbol === "all-circle" ? (index === symbolIndex ? value : "-") : index === symbolIndex ? value : symbol,
+              isWholeSymbolOption(symbol) ? (index === symbolIndex ? value : "-") : index === symbolIndex ? value : symbol,
             );
         return { ...row, symbols };
       }),

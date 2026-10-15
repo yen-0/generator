@@ -1,4 +1,14 @@
-export const SYMBOL_OPTIONS = ["-", "circle", "cross", "triangle", "?", "all-circle"] as const;
+export const SYMBOL_OPTIONS = [
+  "-",
+  "circle",
+  "cross",
+  "triangle",
+  "?",
+  "all-circle",
+  "all-cross",
+  "all-triangle",
+] as const;
+export const WHOLE_SYMBOL_OPTIONS = ["all-circle", "all-cross", "all-triangle"] as const;
 export const DEFAULT_DENOMINATOR = 7;
 export const MODE_OPTIONS = [
   {
@@ -9,6 +19,7 @@ export const MODE_OPTIONS = [
 ] as const;
 
 export type SymbolOption = (typeof SYMBOL_OPTIONS)[number];
+export type WholeSymbolOption = (typeof WHOLE_SYMBOL_OPTIONS)[number];
 export type DenominatorMode = number;
 export type Mode = (typeof MODE_OPTIONS)[number]["value"];
 export type SymbolColumnCount = number;
@@ -41,7 +52,13 @@ export const SYMBOL_LABELS: Record<SymbolOption, string> = {
   triangle: "△",
   "?": "?",
   "all-circle": "全部〇",
+  "all-cross": "全部×",
+  "all-triangle": "全部△",
 };
+
+export function isWholeSymbolOption(value: SymbolOption): value is WholeSymbolOption {
+  return WHOLE_SYMBOL_OPTIONS.includes(value as WholeSymbolOption);
+}
 
 export function createSymbols(count: SymbolColumnCount): SymbolOption[] {
   return Array.from({ length: count }, () => "-");
