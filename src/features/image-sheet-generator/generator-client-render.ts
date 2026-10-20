@@ -40,6 +40,10 @@ const SYMBOL_LAYOUT_REFERENCE_WIDTH =
 
 const TITLE_BANNER_HEIGHT = 132 * RENDER_SCALE;
 const TITLE_BANNER_WIDTH = 850 * RENDER_SCALE;
+const LANDSCAPE_TEXT_WIDTH = 1120;
+const LANDSCAPE_TEXT_HEIGHT = 680;
+const LANDSCAPE_TEXT_GAP = 16;
+const LANDSCAPE_TEXT_PADDING = 12;
 const TITLE_TEXT_PADDING_X = 60 * RENDER_SCALE;
 const TITLE_MIN_FONT_SIZE = 52 * RENDER_SCALE;
 const TITLE_MAX_FONT_SIZE = 132 * RENDER_SCALE;
@@ -80,7 +84,7 @@ export async function renderClientPreviewBlob(payload: GeneratorPayload, preview
   }
 
   const titleBanner = renderTitleBannerCanvas(payload.title);
-  const textPanels = renderCumulativeTextPanels(rows);
+  const textPanels = renderCumulativeTextPanels(rows, payload.orientation);
   const row = rows[safePreviewIndex];
   const ooPanel = renderOoPanelCanvas(row.numerator, row.denominator);
   const canvas = renderModeOneCanvas(titleBanner, textPanels[safePreviewIndex] ?? null, ooPanel, payload.orientation);
@@ -120,7 +124,7 @@ async function renderAllModeOutputs(
   orientation: Orientation,
 ): Promise<RenderOutput[]> {
   const titleBanner = renderTitleBannerCanvas(title);
-  const textPanels = renderCumulativeTextPanels(rows);
+  const textPanels = renderCumulativeTextPanels(rows, orientation);
   const ooPanels = rows.map((row) => renderOoPanelCanvas(row.numerator, row.denominator));
   const outputs: RenderOutput[] = [];
   const modeOneFrames: Array<{ textPanel: HTMLCanvasElement | null; ooPanel: HTMLCanvasElement }> = [
@@ -203,6 +207,16 @@ function renderModeOneCanvas(
 
   context.drawImage(titleBanner, 0, 0);
 
+  if (orientation === "landscape") {
+    if (textPanel) {
+      context.drawImage(textPanel, sideInset, bannerHeight - overlap);
+    }
+    if (ooPanel) {
+      drawResizedCanvas(context, ooPanel, width - 400 - sideInset, bannerHeight - overlap, 400);
+    }
+    return canvas;
+  }
+
   if (textPanel) {
     drawResizedCanvas(context, textPanel, textLeft, bannerHeight - overlap, textWidth);
   }
@@ -214,8 +228,12 @@ function renderModeOneCanvas(
   return canvas;
 }
 
-function renderCumulativeTextPanels(rows: NormalizedRow[]) {
+function renderCumulativeTextPanels(rows: NormalizedRow[], orientation: Orientation) {
   const renderedPanels = rows.map((row) => renderTextPanelCanvas(row.text, row.symbols, row.fontSize));
+  if (orientation === "landscape") {
+    return renderLandscapeTextPanels(renderedPanels);
+  }
+
   const fullWidth =
     Math.max(...renderedPanels.map((canvas) => canvas.width), CANVAS_WIDTH) + OUTER_PADDING * 2;
   const fullHeight =
@@ -233,6 +251,44 @@ function renderCumulativeTextPanels(rows: NormalizedRow[]) {
       currentTop += panel.height + PANEL_GAP;
     }
 
+    return canvas;
+  });
+}
+
+function renderLandscapeTextPanels(panels: HTMLCanvasElement[]) {
+  const availableWidth = LANDSCAPE_TEXT_WIDTH - LANDSCAPE_TEXT_PADDING * 2;
+  const availableHeight = LANDSCAPE_TEXT_HEIGHT - LANDSCAPE_TEXT_PADDING * 2;
+  const maxPanelWidth = Math.max(...panels.map((panel) => panel.width));
+  const maxPanelHeight = Math.max(...panels.map((panel) => panel.height));
+  let bestColumns = 1;
+  let bestScale = 0;
+
+  for (let columns = 1; columns <= panels.length; columns += 1) {
+    const rows = Math.ceil(panels.length / columns);
+    const cellWidth = (availableWidth - (columns - 1) * LANDSCAPE_TEXT_GAP) / columns;
+    const cellHeight = (availableHeight - (rows - 1) * LANDSCAPE_TEXT_GAP) / rows;
+    const scale = Math.min(cellWidth / maxPanelWidth, cellHeight / maxPanelHeight);
+    if (scale > bestScale) {
+      bestScale = scale;
+      bestColumns = columns;
+    }
+  }
+
+  const rowCount = Math.ceil(panels.length / bestColumns);
+  const cellWidth = (availableWidth - (bestColumns - 1) * LANDSCAPE_TEXT_GAP) / bestColumns;
+  const cellHeight = (availableHeight - (rowCount - 1) * LANDSCAPE_TEXT_GAP) / rowCount;
+
+  return panels.map((_, index) => {
+    const canvas = createCanvas(LANDSCAPE_TEXT_WIDTH, LANDSCAPE_TEXT_HEIGHT);
+    const context = getCanvasContext(canvas);
+    for (const [panelIndex, panel] of panels.slice(0, index + 1).entries()) {
+      const column = panelIndex % bestColumns;
+      const row = Math.floor(panelIndex / bestColumns);
+      const x = LANDSCAPE_TEXT_PADDING + column * (cellWidth + LANDSCAPE_TEXT_GAP) +
+        (cellWidth - panel.width * bestScale) / 2;
+      const y = LANDSCAPE_TEXT_PADDING + row * (cellHeight + LANDSCAPE_TEXT_GAP);
+      context.drawImage(panel, x, y, panel.width * bestScale, panel.height * bestScale);
+    }
     return canvas;
   });
 }
