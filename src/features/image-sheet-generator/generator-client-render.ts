@@ -40,10 +40,7 @@ const SYMBOL_LAYOUT_REFERENCE_WIDTH =
 
 const TITLE_BANNER_HEIGHT = 132 * RENDER_SCALE;
 const TITLE_BANNER_WIDTH = 850 * RENDER_SCALE;
-const LANDSCAPE_TEXT_WIDTH = 1120;
-const LANDSCAPE_TEXT_HEIGHT = 680;
-const LANDSCAPE_TEXT_GAP = 16;
-const LANDSCAPE_TEXT_PADDING = 12;
+const LANDSCAPE_BANNER_HEIGHT = 66 * RENDER_SCALE;
 const TITLE_TEXT_PADDING_X = 60 * RENDER_SCALE;
 const TITLE_MIN_FONT_SIZE = 52 * RENDER_SCALE;
 const TITLE_MAX_FONT_SIZE = 132 * RENDER_SCALE;
@@ -79,12 +76,12 @@ export async function renderClientPreviewBlob(payload: GeneratorPayload, preview
   const safePreviewIndex = clampPreviewIndex(previewIndex, rows.length);
 
   if (rows.length === 0) {
-    const titleBanner = renderTitleBannerCanvas(payload.title);
+    const titleBanner = renderTitleBannerCanvas(payload.title, payload.orientation);
     return canvasToBlob(titleBanner);
   }
 
-  const titleBanner = renderTitleBannerCanvas(payload.title);
-  const textPanels = renderCumulativeTextPanels(rows, payload.orientation);
+  const titleBanner = renderTitleBannerCanvas(payload.title, payload.orientation);
+  const textPanels = renderCumulativeTextPanels(rows);
   const row = rows[safePreviewIndex];
   const ooPanel = renderOoPanelCanvas(row.numerator, row.denominator);
   const canvas = renderModeOneCanvas(titleBanner, textPanels[safePreviewIndex] ?? null, ooPanel, payload.orientation);
@@ -123,8 +120,8 @@ async function renderAllModeOutputs(
   denominatorMode: DenominatorMode,
   orientation: Orientation,
 ): Promise<RenderOutput[]> {
-  const titleBanner = renderTitleBannerCanvas(title);
-  const textPanels = renderCumulativeTextPanels(rows, orientation);
+  const titleBanner = renderTitleBannerCanvas(title, orientation);
+  const textPanels = renderCumulativeTextPanels(rows);
   const ooPanels = rows.map((row) => renderOoPanelCanvas(row.numerator, row.denominator));
   const outputs: RenderOutput[] = [];
   const modeOneFrames: Array<{ textPanel: HTMLCanvasElement | null; ooPanel: HTMLCanvasElement }> = [
@@ -194,7 +191,7 @@ function renderModeOneCanvas(
 ) {
   const width = TITLE_BANNER_WIDTH;
   const height = Math.round((width * (orientation === "portrait" ? 16 / 9 : 9 / 16)));
-  const bannerHeight = TITLE_BANNER_HEIGHT;
+  const bannerHeight = titleBanner.height;
   const overlap = 18 * RENDER_SCALE;
   const quarterWidth = Math.floor(width / 4);
   const textWidth = quarterWidth;
@@ -208,11 +205,21 @@ function renderModeOneCanvas(
   context.drawImage(titleBanner, 0, 0);
 
   if (orientation === "landscape") {
+    const landscapeTop = bannerHeight - 8 * RENDER_SCALE;
     if (textPanel) {
-      context.drawImage(textPanel, sideInset, bannerHeight - overlap);
+      const maxTextWidth = 470;
+      const maxTextHeight = height - landscapeTop - sideInset;
+      const textScale = Math.min(maxTextWidth / textPanel.width, maxTextHeight / textPanel.height);
+      context.drawImage(
+        textPanel,
+        sideInset,
+        landscapeTop,
+        textPanel.width * textScale,
+        textPanel.height * textScale,
+      );
     }
     if (ooPanel) {
-      drawResizedCanvas(context, ooPanel, width - 400 - sideInset, bannerHeight - overlap, 400);
+      drawResizedCanvas(context, ooPanel, width - 400 - sideInset, landscapeTop, 400);
     }
     return canvas;
   }
@@ -228,12 +235,8 @@ function renderModeOneCanvas(
   return canvas;
 }
 
-function renderCumulativeTextPanels(rows: NormalizedRow[], orientation: Orientation) {
+function renderCumulativeTextPanels(rows: NormalizedRow[]) {
   const renderedPanels = rows.map((row) => renderTextPanelCanvas(row.text, row.symbols, row.fontSize));
-  if (orientation === "landscape") {
-    return renderLandscapeTextPanels(renderedPanels);
-  }
-
   const fullWidth =
     Math.max(...renderedPanels.map((canvas) => canvas.width), CANVAS_WIDTH) + OUTER_PADDING * 2;
   const fullHeight =
@@ -251,44 +254,6 @@ function renderCumulativeTextPanels(rows: NormalizedRow[], orientation: Orientat
       currentTop += panel.height + PANEL_GAP;
     }
 
-    return canvas;
-  });
-}
-
-function renderLandscapeTextPanels(panels: HTMLCanvasElement[]) {
-  const availableWidth = LANDSCAPE_TEXT_WIDTH - LANDSCAPE_TEXT_PADDING * 2;
-  const availableHeight = LANDSCAPE_TEXT_HEIGHT - LANDSCAPE_TEXT_PADDING * 2;
-  const maxPanelWidth = Math.max(...panels.map((panel) => panel.width));
-  const maxPanelHeight = Math.max(...panels.map((panel) => panel.height));
-  let bestColumns = 1;
-  let bestScale = 0;
-
-  for (let columns = 1; columns <= panels.length; columns += 1) {
-    const rows = Math.ceil(panels.length / columns);
-    const cellWidth = (availableWidth - (columns - 1) * LANDSCAPE_TEXT_GAP) / columns;
-    const cellHeight = (availableHeight - (rows - 1) * LANDSCAPE_TEXT_GAP) / rows;
-    const scale = Math.min(cellWidth / maxPanelWidth, cellHeight / maxPanelHeight);
-    if (scale > bestScale) {
-      bestScale = scale;
-      bestColumns = columns;
-    }
-  }
-
-  const rowCount = Math.ceil(panels.length / bestColumns);
-  const cellWidth = (availableWidth - (bestColumns - 1) * LANDSCAPE_TEXT_GAP) / bestColumns;
-  const cellHeight = (availableHeight - (rowCount - 1) * LANDSCAPE_TEXT_GAP) / rowCount;
-
-  return panels.map((_, index) => {
-    const canvas = createCanvas(LANDSCAPE_TEXT_WIDTH, LANDSCAPE_TEXT_HEIGHT);
-    const context = getCanvasContext(canvas);
-    for (const [panelIndex, panel] of panels.slice(0, index + 1).entries()) {
-      const column = panelIndex % bestColumns;
-      const row = Math.floor(panelIndex / bestColumns);
-      const x = LANDSCAPE_TEXT_PADDING + column * (cellWidth + LANDSCAPE_TEXT_GAP) +
-        (cellWidth - panel.width * bestScale) / 2;
-      const y = LANDSCAPE_TEXT_PADDING + row * (cellHeight + LANDSCAPE_TEXT_GAP);
-      context.drawImage(panel, x, y, panel.width * bestScale, panel.height * bestScale);
-    }
     return canvas;
   });
 }
@@ -317,12 +282,13 @@ function renderTextPanelCanvas(text: string, symbols: NormalizedRow["symbols"], 
   return canvas;
 }
 
-function renderTitleBannerCanvas(title: string) {
+function renderTitleBannerCanvas(title: string, orientation: Orientation) {
   const safeTitle = title.trim() || "TITLE";
-  const canvas = createCanvas(TITLE_BANNER_WIDTH, TITLE_BANNER_HEIGHT);
+  const bannerHeight = orientation === "landscape" ? LANDSCAPE_BANNER_HEIGHT : TITLE_BANNER_HEIGHT;
+  const canvas = createCanvas(TITLE_BANNER_WIDTH, bannerHeight);
   const context = getCanvasContext(canvas);
-  const fontSize = fitTitleFontSize(context, safeTitle);
-  const gradient = context.createLinearGradient(0, 0, 0, TITLE_BANNER_HEIGHT);
+  const fontSize = fitTitleFontSize(context, safeTitle, bannerHeight);
+  const gradient = context.createLinearGradient(0, 0, 0, bannerHeight);
   gradient.addColorStop(0, "#fff7cf");
   gradient.addColorStop(0.16, GOLD_TOP);
   gradient.addColorStop(0.36, "#f0cf78");
@@ -335,7 +301,7 @@ function renderTitleBannerCanvas(title: string) {
   context.font = `700 ${fontSize}px ${SANS_FONT}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.lineWidth = 16;
+  context.lineWidth = orientation === "landscape" ? 10 : 16;
   context.strokeStyle = "#000000";
   context.strokeText(safeTitle, canvas.width / 2, canvas.height / 2 + 2);
   context.fillStyle = gradient;
@@ -508,8 +474,8 @@ function measureLines(lines: string[], fontSize: number) {
   return { lineMetrics, totalHeight };
 }
 
-function fitTitleFontSize(context: CanvasRenderingContext2D, title: string) {
-  const maxTextHeight = TITLE_BANNER_HEIGHT - 24;
+function fitTitleFontSize(context: CanvasRenderingContext2D, title: string, bannerHeight: number) {
+  const maxTextHeight = bannerHeight - 24;
   for (let size = TITLE_MAX_FONT_SIZE; size >= TITLE_MIN_FONT_SIZE; size -= 2) {
     context.font = `700 ${size}px ${SANS_FONT}`;
     const metrics = context.measureText(title);
