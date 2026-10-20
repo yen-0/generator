@@ -22,6 +22,7 @@ export type SymbolOption = (typeof SYMBOL_OPTIONS)[number];
 export type WholeSymbolOption = (typeof WHOLE_SYMBOL_OPTIONS)[number];
 export type DenominatorMode = number;
 export type Mode = (typeof MODE_OPTIONS)[number]["value"];
+export type Orientation = "portrait" | "landscape";
 export type SymbolColumnCount = number;
 
 export type GeneratorRow = {
@@ -35,6 +36,7 @@ export type GeneratorRow = {
 
 export type GeneratorPayload = {
   mode: Mode;
+  orientation: Orientation;
   title: string;
   denominatorMode: DenominatorMode;
   symbolColumnCount: SymbolColumnCount;

@@ -12,6 +12,7 @@ import {
   type DenominatorMode,
   type GeneratorPayload,
   type NormalizedRow,
+  type Orientation,
   type SymbolOption,
 } from "./generator-shared";
 
@@ -82,13 +83,13 @@ export async function renderClientPreviewBlob(payload: GeneratorPayload, preview
   const textPanels = renderCumulativeTextPanels(rows);
   const row = rows[safePreviewIndex];
   const ooPanel = renderOoPanelCanvas(row.numerator, row.denominator);
-  const canvas = renderModeOneCanvas(titleBanner, textPanels[safePreviewIndex] ?? null, ooPanel);
+  const canvas = renderModeOneCanvas(titleBanner, textPanels[safePreviewIndex] ?? null, ooPanel, payload.orientation);
   return canvasToBlob(canvas);
 }
 
 export async function renderClientZipBlob(payload: GeneratorPayload, saveJson?: string) {
   const rows = payload.rows.map(normalizeRow);
-  const outputs = await renderAllModeOutputs(payload.title, rows, payload.denominatorMode);
+  const outputs = await renderAllModeOutputs(payload.title, rows, payload.denominatorMode, payload.orientation);
   const zip = new JSZip();
 
   for (const output of outputs) {
@@ -116,6 +117,7 @@ async function renderAllModeOutputs(
   title: string,
   rows: NormalizedRow[],
   denominatorMode: DenominatorMode,
+  orientation: Orientation,
 ): Promise<RenderOutput[]> {
   const titleBanner = renderTitleBannerCanvas(title);
   const textPanels = renderCumulativeTextPanels(rows);
@@ -152,7 +154,7 @@ async function renderAllModeOutputs(
   for (const [outputIndex, frame] of modeOneFrames.entries()) {
     outputs.push({
       fileName: `mode1_all_component_${outputIndex}.png`,
-      blob: await canvasToBlob(renderModeOneCanvas(titleBanner, frame.textPanel, frame.ooPanel)),
+      blob: await canvasToBlob(renderModeOneCanvas(titleBanner, frame.textPanel, frame.ooPanel, orientation)),
     });
   }
 
@@ -184,9 +186,10 @@ function renderModeOneCanvas(
   titleBanner: HTMLCanvasElement,
   textPanel: HTMLCanvasElement | null,
   ooPanel: HTMLCanvasElement | null,
+  orientation: Orientation,
 ) {
   const width = TITLE_BANNER_WIDTH;
-  const height = Math.round((width * 16) / 9);
+  const height = Math.round((width * (orientation === "portrait" ? 16 / 9 : 9 / 16)));
   const bannerHeight = TITLE_BANNER_HEIGHT;
   const overlap = 18 * RENDER_SCALE;
   const quarterWidth = Math.floor(width / 4);

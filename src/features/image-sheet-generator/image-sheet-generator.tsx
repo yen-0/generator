@@ -35,6 +35,7 @@ import {
   type DenominatorMode,
   type GeneratorPayload,
   type GeneratorRow,
+  type Orientation,
   type SymbolOption,
 } from "./generator-shared";
 import {
@@ -129,6 +130,7 @@ const SOUND_PATHS: Record<SupportedAnimatedSymbol, string> = {
 
 export function ImageSheetGenerator() {
   const [title, setTitle] = useState("");
+  const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [denominatorMode, setDenominatorMode] = useState<DenominatorMode>(7);
   const [symbolColumnCount, setSymbolColumnCount] = useState(INITIAL_SYMBOL_COLUMN_COUNT);
   const [symbolColumnNotes, setSymbolColumnNotes] = useState<string[]>(
@@ -340,12 +342,13 @@ export function ImageSheetGenerator() {
   const previewPayload = useMemo<GeneratorPayload>(
     () => ({
       mode: "all",
+      orientation,
       title,
       denominatorMode,
       symbolColumnCount,
       rows,
     }),
-    [denominatorMode, rows, symbolColumnCount, title],
+    [denominatorMode, orientation, rows, symbolColumnCount, title],
   );
   const deferredPreviewPayload = useDeferredValue(previewPayload);
 
@@ -1150,6 +1153,7 @@ export function ImageSheetGenerator() {
     return {
       version: 1,
       title,
+      orientation,
       denominatorMode,
       symbolColumnCount,
       symbolColumnNotes,
@@ -1188,6 +1192,7 @@ export function ImageSheetGenerator() {
       const saved = parseSaveData(parsed);
 
       setTitle(saved.title);
+      setOrientation(saved.orientation);
       setDenominatorMode(saved.denominatorMode);
       setSymbolColumnCount(saved.symbolColumnCount);
       setSymbolColumnNotes(saved.symbolColumnNotes);
@@ -1670,6 +1675,10 @@ export function ImageSheetGenerator() {
                     <span className={styles.liveDot} />
                     <h2>Row {safePreviewIndex + 1}</h2>
                   </div>
+                  <div className={styles.orientationToggle} role="group" aria-label="画像の向き">
+                    <button type="button" aria-pressed={orientation === "portrait"} onClick={() => setOrientation("portrait")}>縦</button>
+                    <button type="button" aria-pressed={orientation === "landscape"} onClick={() => setOrientation("landscape")}>横</button>
+                  </div>
                   <div className={styles.previewNav}>
                     <button
                       type="button"
@@ -1704,8 +1713,8 @@ export function ImageSheetGenerator() {
                       className={styles.previewImage}
                       src={previewUrl}
                       alt="Generated preview"
-                      width={1200}
-                      height={675}
+                      width={1700}
+                      height={orientation === "portrait" ? 3022 : 956}
                       unoptimized
                     />
                   )}
@@ -2143,6 +2152,7 @@ function limitAnimatedSymbols(symbols: SymbolOption[], visibleSupportedCount: nu
 
 type SavedGeneratorState = {
   title: string;
+  orientation: Orientation;
   denominatorMode: number;
   symbolColumnCount: number;
   symbolColumnNotes: string[];
@@ -2233,6 +2243,7 @@ function parseSaveData(input: unknown): SavedGeneratorState {
 
   return {
     title: typeof input.title === "string" ? input.title : "",
+    orientation: input.orientation === "landscape" ? "landscape" : "portrait",
     denominatorMode,
     symbolColumnCount,
     symbolColumnNotes: Array.from({ length: symbolColumnCount }, (_, index) => {
