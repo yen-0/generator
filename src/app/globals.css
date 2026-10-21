@@ -30,6 +30,7 @@ body {
 body {
   height: 100%;
   overflow-y: hidden;
+  font-size: 17px;
   color: var(--text);
   background: var(--surface-alt);
   font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
